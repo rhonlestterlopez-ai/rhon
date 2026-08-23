@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RHONBOT — Premium BIN Vault
+✦ PREMIUM BIN VAULT ✦
 Bot: @Rhonreferbot
+Channel: @PythonPrivateTools
 Password: RHONLESTTERLOPEZ
 """
 
@@ -18,6 +19,8 @@ import requests
 # ─── CONFIG ──────────────────────────────────────────────────────────────
 BOT_TOKEN = "8542412067:AAHVQnk_uS2NG9AAlVkucPJuuu-s8ykEzZM"
 BOT_USERNAME = "Rhonreferbot"
+CHANNEL_LINK = "https://t.me/PythonPrivateTools"
+CHANNEL_USERNAME = "PythonPrivateTools"
 ADMIN_PASSWORD = "RHONLESTTERLOPEZ"
 REDEEM_COST = 5
 
@@ -142,6 +145,10 @@ class Database:
         self.cursor.execute("DELETE FROM bin_items WHERE id = ?", (item_id,))
         self.conn.commit()
 
+    def delete_all_items(self):
+        self.cursor.execute("DELETE FROM bin_items")
+        self.conn.commit()
+
     def add_redemption(self, user_id, item_id):
         self.cursor.execute("INSERT INTO redemptions (user_id, item_id) VALUES (?, ?)", (user_id, item_id))
         self.conn.commit()
@@ -215,13 +222,44 @@ def send_document(chat_id, file_path, caption=""):
     except Exception as e:
         print(f"Error sending document: {e}")
 
+# ─── CHECK CHANNEL MEMBERSHIP ─────────────────────────────────────────
+
+def is_member(user_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
+    data = {"chat_id": f"@{CHANNEL_USERNAME}", "user_id": user_id}
+    try:
+        r = requests.post(url, data=data, timeout=10)
+        if r.status_code == 200:
+            result = r.json()
+            if result.get("ok"):
+                status = result.get("result", {}).get("status", "")
+                return status in ["member", "administrator", "creator"]
+    except Exception:
+        pass
+    return False
+
 # ─── ADMIN SESSIONS ────────────────────────────────────────────────────
 
-admin_sessions = {}  # user_id: True
+admin_sessions = {}
 
 # ─── HANDLERS ──────────────────────────────────────────────────────────
 
 def handle_start(chat_id, user_id, username, first_name, args):
+    if not is_member(user_id):
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📢 Join Channel", "url": CHANNEL_LINK}],
+                [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
+            ]
+        }
+        send_message(
+            chat_id,
+            f"🔐 *Join Our Channel First*\n\n"
+            f"Click below to join @{CHANNEL_USERNAME}, then press 'I've Joined!'",
+            reply_markup=keyboard
+        )
+        return
+
     referrer_code = args[0] if args else None
     user_data = db.add_user(user_id, username, first_name, referrer_code)
 
@@ -231,22 +269,48 @@ def handle_start(chat_id, user_id, username, first_name, args):
             send_message(
                 chat_id,
                 f"✅ You were invited by {referrer.get('first_name', 'Someone')}!\n\n"
-                f"🔗 Your referral code: `{user_data['referral_code']}`\n\n"
-                f"Use /menu to start!"
+                f"🔗 Your referral code: `{user_data['referral_code']}`"
             )
             return
 
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
+            [{"text": "📊 My Stats", "callback_data": "stats"}],
+            [{"text": "🔗 My Referral Link", "callback_data": "referral"}],
+            [{"text": "👑 Owner Panel", "callback_data": "owner_login"}],
+        ]
+    }
     send_message(
         chat_id,
-        f"🏦 *Welcome to Premium BIN Vault!*\n\n"
+        f"╔══════════════════════════════════╗\n"
+        f"║    ✦ PREMIUM BIN VAULT ✦       ║\n"
+        f"╚══════════════════════════════════╝\n\n"
+        f"🏦 *Welcome, {first_name}!*\n\n"
         f"Invite friends → earn points → redeem BINs.\n\n"
         f"🔗 Your referral link:\n"
         f"`https://t.me/{BOT_USERNAME}?start={user_data['referral_code']}`\n\n"
         f"📊 Points: {user_data['points']}\n"
-        f"Use /menu to start."
+        f"📦 Available: {user_data['points'] - user_data['used_points']}\n\n"
+        f"✦ Use the buttons below ✦",
+        reply_markup=keyboard
     )
 
 def handle_menu(chat_id, user_id):
+    if not is_member(user_id):
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📢 Join Channel", "url": CHANNEL_LINK}],
+                [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
+            ]
+        }
+        send_message(
+            chat_id,
+            f"🔐 *Join Our Channel First*",
+            reply_markup=keyboard
+        )
+        return
+
     user_data = db.get_user(user_id)
     if not user_data:
         send_message(chat_id, "❌ Please use /start first.")
@@ -260,12 +324,14 @@ def handle_menu(chat_id, user_id):
             [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
             [{"text": "📊 My Stats", "callback_data": "stats"}],
             [{"text": "🔗 My Referral Link", "callback_data": "referral"}],
-            [{"text": "👑 Owner Login", "callback_data": "owner_login"}],
+            [{"text": "👑 Owner Panel", "callback_data": "owner_login"}],
         ]
     }
     send_message(
         chat_id,
-        f"📋 *Premium Menu*\n\n"
+        f"╔══════════════════════════════════╗\n"
+        f"║       ✦ PREMIUM MENU ✦         ║\n"
+        f"╚══════════════════════════════════╝\n\n"
         f"👤 {user_data.get('first_name', 'User')}\n"
         f"👥 Referrals: {referrals}\n"
         f"⭐ Points: {user_data['points']}\n"
@@ -274,30 +340,34 @@ def handle_menu(chat_id, user_id):
         reply_markup=keyboard
     )
 
-def handle_owner_login(chat_id, user_id, text):
-    if text.upper() == ADMIN_PASSWORD:
-        admin_sessions[user_id] = True
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "📦 Add BIN", "callback_data": "admin_add"}],
-                [{"text": "📋 List BINs", "callback_data": "admin_list"}],
-                [{"text": "🗑️ Delete BIN", "callback_data": "admin_delete"}],
-                [{"text": "📢 Broadcast", "callback_data": "admin_broadcast"}],
-                [{"text": "📊 Bot Stats", "callback_data": "admin_stats"}],
-                [{"text": "👥 All Users", "callback_data": "admin_users"}],
-                [{"text": "📦 Backup DB", "callback_data": "admin_backup"}],
-                [{"text": "🔙 Back to Menu", "callback_data": "menu_back"}],
-            ]
-        }
-        send_message(
-            chat_id,
-            f"👑 *Owner Panel Unlocked!*\n\n"
-            f"Welcome back, master.\n\n"
-            f"Select an option:",
-            reply_markup=keyboard
-        )
-    else:
-        send_message(chat_id, "❌ *Wrong Password!* Access denied.")
+# ─── OWNER PANEL ──────────────────────────────────────────────────────
+
+def show_owner_panel(chat_id):
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📦 Add BIN", "callback_data": "admin_add"}],
+            [{"text": "📋 List BINs", "callback_data": "admin_list"}],
+            [{"text": "🗑️ Delete BIN", "callback_data": "admin_delete"}],
+            [{"text": "🗑️ Delete ALL BINs", "callback_data": "admin_delete_all"}],
+            [{"text": "📢 Broadcast", "callback_data": "admin_broadcast"}],
+            [{"text": "⭐ Add Points", "callback_data": "admin_addpoints"}],
+            [{"text": "📊 Bot Stats", "callback_data": "admin_stats"}],
+            [{"text": "👥 All Users", "callback_data": "admin_users"}],
+            [{"text": "📦 Backup DB", "callback_data": "admin_backup"}],
+            [{"text": "🔙 Back to Menu", "callback_data": "menu_back"}],
+        ]
+    }
+    send_message(
+        chat_id,
+        f"╔══════════════════════════════════╗\n"
+        f"║      ✦ OWNER PANEL ✦           ║\n"
+        f"╚══════════════════════════════════╝\n\n"
+        f"👑 Welcome back, master!\n\n"
+        f"Select an option below:",
+        reply_markup=keyboard
+    )
+
+# ─── CALLBACK HANDLER ──────────────────────────────────────────────────
 
 def handle_callback(query):
     callback_id = query["id"]
@@ -306,6 +376,30 @@ def handle_callback(query):
     data = query["data"]
     user_id = query["from"]["id"]
 
+    if data == "check_join":
+        if is_member(user_id):
+            answer_callback(callback_id, "✅ Joined!")
+            edit_message(
+                chat_id,
+                message_id,
+                "✅ *You've joined!*\n\nNow use /start to access the bot."
+            )
+        else:
+            answer_callback(callback_id, "❌ Not joined yet.")
+            edit_message(
+                chat_id,
+                message_id,
+                f"⚠️ *You still need to join the channel.*\n\n"
+                f"Click below to join @{CHANNEL_USERNAME}",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "📢 Join Channel", "url": CHANNEL_LINK}],
+                        [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
+                    ]
+                }
+            )
+        return
+
     user_data = db.get_user(user_id)
     if not user_data:
         answer_callback(callback_id, "Please use /start first.")
@@ -313,37 +407,41 @@ def handle_callback(query):
 
     answer_callback(callback_id)
 
-    # ─── OWNER LOGIN ──────────────────────────────────────────────────
     if data == "owner_login":
         send_message(
             chat_id,
-            "👑 *Enter Owner Password:*\n\n"
-            "Type the password to unlock admin commands."
+            f"👑 *Enter Owner Password:*\n\n"
+            f"Type the password to unlock the owner panel."
         )
         return
 
-    # ─── ADMIN PANEL ──────────────────────────────────────────────────
-    if user_id not in admin_sessions:
-        send_message(chat_id, "❌ *Please login first.*\n\nClick 'Owner Login' and enter the password.")
+    # ─── ADMIN CHECK ──────────────────────────────────────────────────
+    admin_actions = ["admin_add", "admin_list", "admin_delete", "admin_delete_all",
+                     "admin_broadcast", "admin_stats", "admin_users", 
+                     "admin_backup", "admin_addpoints"]
+    
+    if data in admin_actions and user_id not in admin_sessions:
+        send_message(chat_id, "❌ *Please login first.*\n\nClick 'Owner Panel' and enter the password.")
         return
 
     # ─── ADMIN: Add BIN ──────────────────────────────────────────────
     if data == "admin_add":
         send_message(
             chat_id,
-            "📦 *Add BIN/Tool*\n\n"
-            "Send: `/additem Name Category 5 Content`\n\n"
-            "Example:\n"
-            "`/additem Netflix BINs 5 BIN: 4753950x27xx92x0`"
+            f"📦 *Add BIN/Tool*\n\n"
+            f"Send:\n"
+            f"`/additem Name Category 5 Content`\n\n"
+            f"Example:\n"
+            f"`/additem Netflix BINs 5 BIN: 4753950x27xx92x0 | Exp: 06/31`"
         )
 
     # ─── ADMIN: List BINs ────────────────────────────────────────────
     elif data == "admin_list":
         items = db.get_items()
         if not items:
-            send_message(chat_id, "📦 No items.")
+            send_message(chat_id, "📦 No items found.")
             return
-        msg = "📦 *Items*\n\n"
+        msg = "📦 *BINs & Tools*\n\n"
         for item_id, name, category, cost in items:
             msg += f"• {name} ({category}) — {cost} pts [ID: {item_id}]\n"
         send_message(chat_id, msg)
@@ -352,16 +450,54 @@ def handle_callback(query):
     elif data == "admin_delete":
         send_message(
             chat_id,
-            "🗑️ *Delete BIN*\n\n"
-            "Send: `/delitem <item_id>`"
+            f"🗑️ *Delete BIN*\n\n"
+            f"Send: `/delitem <item_id>`\n\n"
+            f"Use /listitems to see IDs."
+        )
+
+    # ─── ⭐ NEW: Delete ALL BINs ─────────────────────────────────────
+    elif data == "admin_delete_all":
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "⚠️ YES, DELETE ALL", "callback_data": "confirm_delete_all"}],
+                [{"text": "🔙 Cancel", "callback_data": "admin_back"}],
+            ]
+        }
+        send_message(
+            chat_id,
+            f"⚠️ *WARNING: Delete ALL BINs*\n\n"
+            f"This will permanently delete ALL BINs and tools.\n\n"
+            f"Are you sure?",
+            reply_markup=keyboard
+        )
+
+    elif data == "confirm_delete_all":
+        db.delete_all_items()
+        send_message(
+            chat_id,
+            f"🗑️ *All BINs Deleted!*\n\n"
+            f"All BINs and tools have been permanently removed."
         )
 
     # ─── ADMIN: Broadcast ────────────────────────────────────────────
     elif data == "admin_broadcast":
         send_message(
             chat_id,
-            "📢 *Broadcast*\n\n"
-            "Send: `/broadcast <message>`"
+            f"📢 *Broadcast*\n\n"
+            f"Send: `/broadcast <message>`\n\n"
+            f"Example:\n"
+            f"`/broadcast New BIN added! 🎉`"
+        )
+
+    # ─── ADMIN: Add Points ───────────────────────────────────────────
+    elif data == "admin_addpoints":
+        send_message(
+            chat_id,
+            f"⭐ *Add Points*\n\n"
+            f"Send: `/addpoints <user_id> <amount>`\n\n"
+            f"Example:\n"
+            f"`/addpoints 123456789 10`\n\n"
+            f"Use /users to see user IDs."
         )
 
     # ─── ADMIN: Stats ────────────────────────────────────────────────
@@ -370,10 +506,10 @@ def handle_callback(query):
         send_message(
             chat_id,
             f"📊 *Bot Stats*\n\n"
-            f"👥 Total Users: {stats[0]}\n"
-            f"🔗 Total Referrals: {stats[1]}\n"
-            f"⭐ Total Points: {stats[2]}\n"
-            f"📦 Total Items: {stats[3]}"
+            f"👥 Users: {stats[0]}\n"
+            f"🔗 Referrals: {stats[1]}\n"
+            f"⭐ Points: {stats[2]}\n"
+            f"📦 Items: {stats[3]}"
         )
 
     # ─── ADMIN: All Users ────────────────────────────────────────────
@@ -398,41 +534,41 @@ def handle_callback(query):
             stats = db.get_stats()
             caption = (
                 f"📦 *Database Backup*\n\n"
-                f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"📊 Size: {size:.2f} KB\n"
                 f"👥 Users: {stats[0]}\n"
-                f"🔗 Referrals: {stats[1]}\n"
-                f"⭐ Points: {stats[2]}\n"
                 f"📦 Items: {stats[3]}"
             )
             send_document(chat_id, "referral.db", caption)
         else:
-            send_message(chat_id, "❌ Database file not found.")
+            send_message(chat_id, "❌ Database not found.")
 
-    # ─── Back to Menu ────────────────────────────────────────────────
+    # ─── Back ─────────────────────────────────────────────────────────
+    elif data == "admin_back":
+        show_owner_panel(chat_id)
+
     elif data == "menu_back":
         handle_menu(chat_id, user_id)
 
-    # ─── Stats ────────────────────────────────────────────────────────
+    # ─── STATS ────────────────────────────────────────────────────────
     elif data == "stats":
         referrals = db.get_referrals(user_id)
         available = user_data["points"] - user_data["used_points"]
         send_message(
             chat_id,
             f"📊 *Your Stats*\n\n"
-            f"👤 Name: {user_data.get('first_name', 'Unknown')}\n"
+            f"👤 {user_data.get('first_name', 'Unknown')}\n"
             f"🔗 Code: `{user_data['referral_code']}`\n"
             f"👥 Referrals: {referrals}\n"
-            f"⭐ Total Points: {user_data['points']}\n"
-            f"📦 Available: {available}\n"
-            f"💡 Redeem cost: {REDEEM_COST} pts"
+            f"⭐ Points: {user_data['points']}\n"
+            f"📦 Available: {available}"
         )
 
-    # ─── Referral Link ──────────────────────────────────────────────
+    # ─── REFERRAL LINK ──────────────────────────────────────────────
     elif data == "referral":
         keyboard = {
             "inline_keyboard": [
-                [{"text": "📤 Share Link", "url": f"https://t.me/share/url?url=https://t.me/{BOT_USERNAME}?start={user_data['referral_code']}&text=Join Premium BIN Vault for premium BINs and tools!"}]
+                [{"text": "📤 Share", "url": f"https://t.me/share/url?url=https://t.me/{BOT_USERNAME}?start={user_data['referral_code']}&text=Join Premium BIN Vault!"}]
             ]
         }
         send_message(
@@ -443,7 +579,7 @@ def handle_callback(query):
             reply_markup=keyboard
         )
 
-    # ─── Redeem ──────────────────────────────────────────────────────
+    # ─── REDEEM ──────────────────────────────────────────────────────
     elif data == "redeem":
         items = db.get_items()
         if not items:
@@ -460,12 +596,11 @@ def handle_callback(query):
         send_message(
             chat_id,
             f"📦 *Redeem BINs*\n\n"
-            f"Available points: {available}\n"
+            f"Available: {available} points\n"
             f"Select an item:",
             reply_markup=keyboard
         )
 
-    # ─── Redeem Item ──────────────────────────────────────────────────
     elif data.startswith("redeem_item_"):
         item_id = int(data.split("_")[2])
         item = db.get_item(item_id)
@@ -530,8 +665,9 @@ def handle_callback(query):
 # ─── MAIN LOOP ─────────────────────────────────────────────────────────
 
 def main():
-    print("🤖 Rhonbot started!")
+    print("🤖 Premium BIN Vault Bot started!")
     print(f"📱 Bot: @{BOT_USERNAME}")
+    print(f"📢 Channel: {CHANNEL_LINK}")
     print(f"👑 Password: {ADMIN_PASSWORD}")
     print("="*50)
     last_update = 0
@@ -550,28 +686,9 @@ def main():
                     first_name = msg["from"].get("first_name", "")
                     text = msg.get("text", "")
 
-                    # ─── ⭐ PASSWORD CHECK ⭐ ──────────────────────────
                     if text.upper() == ADMIN_PASSWORD:
                         admin_sessions[user_id] = True
-                        keyboard = {
-                            "inline_keyboard": [
-                                [{"text": "📦 Add BIN", "callback_data": "admin_add"}],
-                                [{"text": "📋 List BINs", "callback_data": "admin_list"}],
-                                [{"text": "🗑️ Delete BIN", "callback_data": "admin_delete"}],
-                                [{"text": "📢 Broadcast", "callback_data": "admin_broadcast"}],
-                                [{"text": "📊 Bot Stats", "callback_data": "admin_stats"}],
-                                [{"text": "👥 All Users", "callback_data": "admin_users"}],
-                                [{"text": "📦 Backup DB", "callback_data": "admin_backup"}],
-                                [{"text": "🔙 Back to Menu", "callback_data": "menu_back"}],
-                            ]
-                        }
-                        send_message(
-                            chat_id,
-                            f"👑 *Owner Panel Unlocked!*\n\n"
-                            f"Welcome back, master.\n\n"
-                            f"Select an option:",
-                            reply_markup=keyboard
-                        )
+                        show_owner_panel(chat_id)
                     elif text == "/start":
                         args = text.split()[1:] if len(text.split()) > 1 else []
                         handle_start(chat_id, user_id, username, first_name, args)
@@ -602,6 +719,9 @@ def main():
                                 send_message(chat_id, f"✅ Deleted item ID: {item_id}")
                             except:
                                 send_message(chat_id, "❌ Invalid ID.")
+                    elif text.startswith("/deleteallbins") and user_id in admin_sessions:
+                        db.delete_all_items()
+                        send_message(chat_id, f"🗑️ *All BINs Deleted!*\n\nAll BINs and tools have been permanently removed.")
                     elif text.startswith("/broadcast") and user_id in admin_sessions:
                         msg = text.replace("/broadcast", "", 1).strip()
                         if not msg:
@@ -618,6 +738,19 @@ def main():
                                 except:
                                     pass
                             send_message(chat_id, f"✅ Broadcast sent to {sent} users.")
+                    elif text.startswith("/addpoints") and user_id in admin_sessions:
+                        parts = text.split()
+                        if len(parts) != 3:
+                            send_message(chat_id, "Usage: /addpoints <user_id> <amount>")
+                        else:
+                            try:
+                                target_id = int(parts[1])
+                                points = int(parts[2])
+                                db.cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (points, target_id))
+                                db.conn.commit()
+                                send_message(chat_id, f"✅ Added {points} points to user {target_id}")
+                            except:
+                                send_message(chat_id, "❌ Invalid ID or points.")
 
                 elif "callback_query" in update:
                     handle_callback(update["callback_query"])
