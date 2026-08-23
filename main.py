@@ -245,6 +245,7 @@ admin_sessions = {}
 # ─── HANDLERS ──────────────────────────────────────────────────────────
 
 def handle_start(chat_id, user_id, username, first_name, args):
+    # ─── CHECK CHANNEL MEMBERSHIP ──────────────────────────────────
     if not is_member(user_id):
         keyboard = {
             "inline_keyboard": [
@@ -260,19 +261,52 @@ def handle_start(chat_id, user_id, username, first_name, args):
         )
         return
 
+    # ─── CHECK IF USER EXISTS ──────────────────────────────────────
+    existing = db.get_user(user_id)
+    if existing:
+        send_message(chat_id, "✅ You're already registered!")
+        handle_menu(chat_id, user_id)
+        return
+
+    # ─── CHECK FOR REFERRAL CODE ──────────────────────────────────
     referrer_code = args[0] if args else None
-    user_data = db.add_user(user_id, username, first_name, referrer_code)
+    referrer_id = None
 
-    if referrer_code and user_data.get("referrer_id"):
-        referrer = db.get_user(user_data["referrer_id"])
-        if referrer:
-            send_message(
-                chat_id,
-                f"✅ You were invited by {referrer.get('first_name', 'Someone')}!\n\n"
-                f"🔗 Your referral code: `{user_data['referral_code']}`"
-            )
-            return
+    if referrer_code:
+        # ─── ⭐ DEBUG: Show received code ──────────────────────────
+        send_message(chat_id, f"🔍 Referral code received: `{referrer_code}`")
+        
+        db.cursor.execute("SELECT user_id FROM users WHERE referral_code = ?", (referrer_code,))
+        result = db.cursor.fetchone()
+        
+        if result:
+            referrer_id = result[0]
+            send_message(chat_id, f"✅ Found referrer! Adding point...")
+            
+            db.cursor.execute("UPDATE users SET points = points + 1 WHERE user_id = ?", (referrer_id,))
+            db.cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)", (referrer_id, user_id))
+            db.conn.commit()
+            
+            referrer = db.get_user(referrer_id)
+            if referrer:
+                send_message(
+                    referrer_id,
+                    f"🎉 *You got a referral!*\n\n"
+                    f"{first_name} used your link.\n"
+                    f"+1 point! (Total: {referrer['points'] + 1})"
+                )
+        else:
+            send_message(chat_id, f"❌ Referral code '{referrer_code}' not found in database.")
 
+    # ─── CREATE USER ──────────────────────────────────────────────────
+    code = db._generate_code()
+    db.cursor.execute(
+        "INSERT INTO users (user_id, username, first_name, referral_code, referrer_id) VALUES (?, ?, ?, ?, ?)",
+        (user_id, username or "", first_name or "", code, referrer_id)
+    )
+    db.conn.commit()
+
+    # ─── WELCOME ──────────────────────────────────────────────────────
     keyboard = {
         "inline_keyboard": [
             [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
@@ -283,16 +317,10 @@ def handle_start(chat_id, user_id, username, first_name, args):
     }
     send_message(
         chat_id,
-        f"╔══════════════════════════════════╗\n"
-        f"║    ✦ PREMIUM BIN VAULT ✦       ║\n"
-        f"╚══════════════════════════════════╝\n\n"
-        f"🏦 *Welcome, {first_name}!*\n\n"
-        f"Invite friends → earn points → redeem BINs.\n\n"
-        f"🔗 Your referral link:\n"
-        f"`https://t.me/{BOT_USERNAME}?start={user_data['referral_code']}`\n\n"
-        f"📊 Points: {user_data['points']}\n"
-        f"📦 Available: {user_data['points'] - user_data['used_points']}\n\n"
-        f"✦ Use the buttons below ✦",
+        f"🏦 *Welcome to Premium BIN Vault!*\n\n"
+        f"🔗 Your referral code: `{code}`\n\n"
+        f"Share it with friends to earn points!\n\n"
+        f"Use the buttons below to start.",
         reply_markup=keyboard
     )
 
@@ -304,11 +332,7 @@ def handle_menu(chat_id, user_id):
                 [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
             ]
         }
-        send_message(
-            chat_id,
-            f"🔐 *Join Our Channel First*",
-            reply_markup=keyboard
-        )
+        send_message(chat_id, f"🔐 *Join Our Channel First*", reply_markup=keyboard)
         return
 
     user_data = db.get_user(user_id)
@@ -329,9 +353,7 @@ def handle_menu(chat_id, user_id):
     }
     send_message(
         chat_id,
-        f"╔══════════════════════════════════╗\n"
-        f"║       ✦ PREMIUM MENU ✦         ║\n"
-        f"╚══════════════════════════════════╝\n\n"
+        f"📋 *Premium Menu*\n\n"
         f"👤 {user_data.get('first_name', 'User')}\n"
         f"👥 Referrals: {referrals}\n"
         f"⭐ Points: {user_data['points']}\n"
@@ -339,8 +361,6 @@ def handle_menu(chat_id, user_id):
         f"💡 {REDEEM_COST} points = 1 redeem",
         reply_markup=keyboard
     )
-
-# ─── OWNER PANEL ──────────────────────────────────────────────────────
 
 def show_owner_panel(chat_id):
     keyboard = {
@@ -359,10 +379,7 @@ def show_owner_panel(chat_id):
     }
     send_message(
         chat_id,
-        f"╔══════════════════════════════════╗\n"
-        f"║      ✦ OWNER PANEL ✦           ║\n"
-        f"╚══════════════════════════════════╝\n\n"
-        f"👑 Welcome back, master!\n\n"
+        f"👑 *Owner Panel*\n\n"
         f"Select an option below:",
         reply_markup=keyboard
     )
@@ -408,14 +425,9 @@ def handle_callback(query):
     answer_callback(callback_id)
 
     if data == "owner_login":
-        send_message(
-            chat_id,
-            f"👑 *Enter Owner Password:*\n\n"
-            f"Type the password to unlock the owner panel."
-        )
+        send_message(chat_id, f"👑 *Enter Owner Password:*\n\nType the password to unlock the owner panel.")
         return
 
-    # ─── ADMIN CHECK ──────────────────────────────────────────────────
     admin_actions = ["admin_add", "admin_list", "admin_delete", "admin_delete_all",
                      "admin_broadcast", "admin_stats", "admin_users", 
                      "admin_backup", "admin_addpoints"]
@@ -424,18 +436,8 @@ def handle_callback(query):
         send_message(chat_id, "❌ *Please login first.*\n\nClick 'Owner Panel' and enter the password.")
         return
 
-    # ─── ADMIN: Add BIN ──────────────────────────────────────────────
     if data == "admin_add":
-        send_message(
-            chat_id,
-            f"📦 *Add BIN/Tool*\n\n"
-            f"Send:\n"
-            f"`/additem Name Category 5 Content`\n\n"
-            f"Example:\n"
-            f"`/additem Netflix BINs 5 BIN: 4753950x27xx92x0 | Exp: 06/31`"
-        )
-
-    # ─── ADMIN: List BINs ────────────────────────────────────────────
+        send_message(chat_id, f"📦 *Add BIN/Tool*\n\nSend:\n`/additem Name Category 5 Content`")
     elif data == "admin_list":
         items = db.get_items()
         if not items:
@@ -445,17 +447,8 @@ def handle_callback(query):
         for item_id, name, category, cost in items:
             msg += f"• {name} ({category}) — {cost} pts [ID: {item_id}]\n"
         send_message(chat_id, msg)
-
-    # ─── ADMIN: Delete BIN ───────────────────────────────────────────
     elif data == "admin_delete":
-        send_message(
-            chat_id,
-            f"🗑️ *Delete BIN*\n\n"
-            f"Send: `/delitem <item_id>`\n\n"
-            f"Use /listitems to see IDs."
-        )
-
-    # ─── ⭐ NEW: Delete ALL BINs ─────────────────────────────────────
+        send_message(chat_id, f"🗑️ *Delete BIN*\n\nSend: `/delitem <item_id>`")
     elif data == "admin_delete_all":
         keyboard = {
             "inline_keyboard": [
@@ -463,56 +456,17 @@ def handle_callback(query):
                 [{"text": "🔙 Cancel", "callback_data": "admin_back"}],
             ]
         }
-        send_message(
-            chat_id,
-            f"⚠️ *WARNING: Delete ALL BINs*\n\n"
-            f"This will permanently delete ALL BINs and tools.\n\n"
-            f"Are you sure?",
-            reply_markup=keyboard
-        )
-
+        send_message(chat_id, f"⚠️ *WARNING: Delete ALL BINs*\n\nThis will permanently delete ALL BINs and tools.\n\nAre you sure?", reply_markup=keyboard)
     elif data == "confirm_delete_all":
         db.delete_all_items()
-        send_message(
-            chat_id,
-            f"🗑️ *All BINs Deleted!*\n\n"
-            f"All BINs and tools have been permanently removed."
-        )
-
-    # ─── ADMIN: Broadcast ────────────────────────────────────────────
+        send_message(chat_id, f"🗑️ *All BINs Deleted!*")
     elif data == "admin_broadcast":
-        send_message(
-            chat_id,
-            f"📢 *Broadcast*\n\n"
-            f"Send: `/broadcast <message>`\n\n"
-            f"Example:\n"
-            f"`/broadcast New BIN added! 🎉`"
-        )
-
-    # ─── ADMIN: Add Points ───────────────────────────────────────────
+        send_message(chat_id, f"📢 *Broadcast*\n\nSend: `/broadcast <message>`")
     elif data == "admin_addpoints":
-        send_message(
-            chat_id,
-            f"⭐ *Add Points*\n\n"
-            f"Send: `/addpoints <user_id> <amount>`\n\n"
-            f"Example:\n"
-            f"`/addpoints 123456789 10`\n\n"
-            f"Use /users to see user IDs."
-        )
-
-    # ─── ADMIN: Stats ────────────────────────────────────────────────
+        send_message(chat_id, f"⭐ *Add Points*\n\nSend: `/addpoints <user_id> <amount>`")
     elif data == "admin_stats":
         stats = db.get_stats()
-        send_message(
-            chat_id,
-            f"📊 *Bot Stats*\n\n"
-            f"👥 Users: {stats[0]}\n"
-            f"🔗 Referrals: {stats[1]}\n"
-            f"⭐ Points: {stats[2]}\n"
-            f"📦 Items: {stats[3]}"
-        )
-
-    # ─── ADMIN: All Users ────────────────────────────────────────────
+        send_message(chat_id, f"📊 *Bot Stats*\n\n👥 Users: {stats[0]}\n🔗 Referrals: {stats[1]}\n⭐ Points: {stats[2]}\n📦 Items: {stats[3]}")
     elif data == "admin_users":
         db.cursor.execute("SELECT user_id, username, first_name, points FROM users ORDER BY points DESC")
         users = db.cursor.fetchall()
@@ -526,31 +480,18 @@ def handle_callback(query):
         if len(users) > 50:
             msg += f"\n... and {len(users) - 50} more"
         send_message(chat_id, msg)
-
-    # ─── ADMIN: Backup ───────────────────────────────────────────────
     elif data == "admin_backup":
         if os.path.exists("referral.db"):
             size = os.path.getsize("referral.db") / 1024
             stats = db.get_stats()
-            caption = (
-                f"📦 *Database Backup*\n\n"
-                f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"📊 Size: {size:.2f} KB\n"
-                f"👥 Users: {stats[0]}\n"
-                f"📦 Items: {stats[3]}"
-            )
+            caption = f"📦 *Database Backup*\n\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 Size: {size:.2f} KB"
             send_document(chat_id, "referral.db", caption)
         else:
             send_message(chat_id, "❌ Database not found.")
-
-    # ─── Back ─────────────────────────────────────────────────────────
     elif data == "admin_back":
         show_owner_panel(chat_id)
-
     elif data == "menu_back":
         handle_menu(chat_id, user_id)
-
-    # ─── STATS ────────────────────────────────────────────────────────
     elif data == "stats":
         referrals = db.get_referrals(user_id)
         available = user_data["points"] - user_data["used_points"]
@@ -563,8 +504,6 @@ def handle_callback(query):
             f"⭐ Points: {user_data['points']}\n"
             f"📦 Available: {available}"
         )
-
-    # ─── REFERRAL LINK ──────────────────────────────────────────────
     elif data == "referral":
         keyboard = {
             "inline_keyboard": [
@@ -578,21 +517,17 @@ def handle_callback(query):
             f"Share it! You get **1 point** per referral.",
             reply_markup=keyboard
         )
-
-    # ─── REDEEM ──────────────────────────────────────────────────────
     elif data == "redeem":
         items = db.get_items()
         if not items:
             send_message(chat_id, "📦 No BINs available yet.")
             return
-
         available = user_data["points"] - user_data["used_points"]
         keyboard = {"inline_keyboard": []}
         for item_id, name, category, cost in items:
             status = "🔓" if available >= cost else "🔒"
             keyboard["inline_keyboard"].append([{"text": f"{status} {name} ({category}) — {cost} pts", "callback_data": f"redeem_item_{item_id}"}])
         keyboard["inline_keyboard"].append([{"text": "🔙 Back", "callback_data": "menu_back"}])
-
         send_message(
             chat_id,
             f"📦 *Redeem BINs*\n\n"
@@ -600,65 +535,38 @@ def handle_callback(query):
             f"Select an item:",
             reply_markup=keyboard
         )
-
     elif data.startswith("redeem_item_"):
         item_id = int(data.split("_")[2])
         item = db.get_item(item_id)
         if not item:
             send_message(chat_id, "❌ Item not found.")
             return
-
         item_id, name, category, content, cost = item
         available = user_data["points"] - user_data["used_points"]
-
         if available < cost:
-            send_message(
-                chat_id,
-                f"❌ *Not enough points!*\n\n"
-                f"Item: {name}\n"
-                f"Cost: {cost} points\n"
-                f"Available: {available}"
-            )
+            send_message(chat_id, f"❌ *Not enough points!*\n\nItem: {name}\nCost: {cost} points\nAvailable: {available}")
             return
-
         keyboard = {
             "inline_keyboard": [
                 [{"text": "✅ Confirm", "callback_data": f"confirm_redeem_{item_id}"}],
                 [{"text": "🔙 Cancel", "callback_data": "redeem"}],
             ]
         }
-        send_message(
-            chat_id,
-            f"🔓 *Confirm Redeem*\n\n"
-            f"Item: {name}\n"
-            f"Cost: {cost} points\n"
-            f"Available: {available}",
-            reply_markup=keyboard
-        )
-
+        send_message(chat_id, f"🔓 *Confirm Redeem*\n\nItem: {name}\nCost: {cost} points\nAvailable: {available}", reply_markup=keyboard)
     elif data.startswith("confirm_redeem_"):
         item_id = int(data.split("_")[2])
         item = db.get_item(item_id)
         if not item:
             send_message(chat_id, "❌ Item not found.")
             return
-
         item_id, name, category, content, cost = item
         available = user_data["points"] - user_data["used_points"]
-
         if available < cost:
             send_message(chat_id, "❌ Not enough points!")
             return
-
         if db.use_points(user_id, cost):
             db.add_redemption(user_id, item_id)
-            send_message(
-                chat_id,
-                f"✅ *Redeemed!*\n\n"
-                f"📦 {name}\n"
-                f"🔑 *Content:*\n```\n{content}\n```\n\n"
-                f"Balance: {available - cost} points"
-            )
+            send_message(chat_id, f"✅ *Redeemed!*\n\n📦 {name}\n🔑 *Content:*\n```\n{content}\n```\n\nBalance: {available - cost} points")
         else:
             send_message(chat_id, "❌ Failed to redeem.")
 
@@ -721,7 +629,7 @@ def main():
                                 send_message(chat_id, "❌ Invalid ID.")
                     elif text.startswith("/deleteallbins") and user_id in admin_sessions:
                         db.delete_all_items()
-                        send_message(chat_id, f"🗑️ *All BINs Deleted!*\n\nAll BINs and tools have been permanently removed.")
+                        send_message(chat_id, f"🗑️ *All BINs Deleted!*")
                     elif text.startswith("/broadcast") and user_id in admin_sessions:
                         msg = text.replace("/broadcast", "", 1).strip()
                         if not msg:
