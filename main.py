@@ -229,6 +229,7 @@ def send_document(chat_id, file_path, caption=""):
 # ─── CHECK CHANNEL MEMBERSHIP ─────────────────────────────────────────
 
 def is_member(user_id):
+    """Check if a user is a member of the channel"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
     data = {"chat_id": f"@{CHANNEL_USERNAME}", "user_id": user_id}
     try:
@@ -245,6 +246,7 @@ def is_member(user_id):
 # ─── HANDLERS ──────────────────────────────────────────────────────────
 
 def handle_start(chat_id, user_id, username, first_name, args):
+    # ─── CHECK CHANNEL MEMBERSHIP ──────────────────────────────────────
     if not is_member(user_id):
         keyboard = {
             "inline_keyboard": [
@@ -260,6 +262,7 @@ def handle_start(chat_id, user_id, username, first_name, args):
         )
         return
 
+    # ─── ADD USER ──────────────────────────────────────────────────────
     referrer_code = args[0] if args else None
     user_data = db.add_user(user_id, username, first_name, referrer_code)
 
