@@ -4,7 +4,7 @@
 REFERRAL BOT — Full Working Version
 Bot: @Rhomreferbot
 Channel: https://t.me/PythonPrivateTools
-Admin: 8726474142
+Owner: 8726474142
 """
 
 import os
@@ -21,7 +21,7 @@ BOT_TOKEN = "8542412067:AAHVQnk_uS2NG9AAlVkucPJuuu-s8ykEzZM"
 BOT_USERNAME = "Rhomreferbot"
 CHANNEL_LINK = "https://t.me/PythonPrivateTools"
 CHANNEL_USERNAME = "PythonPrivateTools"
-ADMINS = [8726474142]
+OWNER = [8726474142]  # Only you
 REDEEM_COST = 5
 
 # ─── DATABASE ──────────────────────────────────────────────────────────
@@ -519,11 +519,12 @@ def handle_callback(query):
     elif data == "menu_back":
         handle_menu(chat_id, user_id)
 
-# ─── ADMIN COMMANDS ──────────────────────────────────────────────────
+# ─── OWNER-ONLY ADMIN COMMANDS ──────────────────────────────────────
 
 def handle_admin(chat_id, user_id, text):
-    if user_id not in ADMINS:
-        send_message(chat_id, "❌ Admin only.")
+    # ─── ONLY OWNER CAN USE ADMIN ────────────────────────────────────
+    if user_id not in OWNER:
+        send_message(chat_id, "❌ Only the bot owner can use this.")
         return
 
     parts = text.split()
@@ -532,6 +533,7 @@ def handle_admin(chat_id, user_id, text):
     
     cmd = parts[0].lower()
 
+    # ─── ADD BIN/Tool ────────────────────────────────────────────────
     if cmd == "/additem":
         try:
             if len(parts) < 5:
@@ -559,6 +561,7 @@ def handle_admin(chat_id, user_id, text):
         except Exception as e:
             send_message(chat_id, f"❌ Error: {e}")
 
+    # ─── LIST ITEMS ──────────────────────────────────────────────────
     elif cmd == "/listitems":
         items = db.get_items()
         if not items:
@@ -569,6 +572,7 @@ def handle_admin(chat_id, user_id, text):
             msg += f"• {name} ({category}) — {cost} pts [ID: {item_id}]\n"
         send_message(chat_id, msg)
 
+    # ─── DELETE ITEM ─────────────────────────────────────────────────
     elif cmd == "/delitem" and len(parts) == 2:
         try:
             item_id = int(parts[1])
@@ -577,6 +581,7 @@ def handle_admin(chat_id, user_id, text):
         except ValueError:
             send_message(chat_id, "❌ Invalid ID.")
 
+    # ─── BACKUP DATABASE ─────────────────────────────────────────────
     elif cmd == "/backup":
         if os.path.exists("referral.db"):
             size = os.path.getsize("referral.db") / 1024
@@ -585,15 +590,16 @@ def handle_admin(chat_id, user_id, text):
                 f"📦 *Database Backup*\n\n"
                 f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"📊 Size: {size:.2f} KB\n"
-                f"👥 Users: {stats[0]}\n"
-                f"🔗 Referrals: {stats[1]}\n"
+                f"👥 Total Users: {stats[0]}\n"
+                f"🔗 Total Referrals: {stats[1]}\n"
                 f"⭐ Total Points: {stats[2]}\n"
-                f"📦 Items: {stats[3]}"
+                f"📦 Total Items: {stats[3]}"
             )
             send_document(chat_id, "referral.db", caption)
         else:
             send_message(chat_id, "❌ Database file not found.")
 
+    # ─── BROADCAST ────────────────────────────────────────────────────
     elif cmd == "/broadcast":
         msg = text.replace("/broadcast", "", 1).strip()
         if not msg:
@@ -611,6 +617,7 @@ def handle_admin(chat_id, user_id, text):
                 pass
         send_message(chat_id, f"✅ Broadcast sent to {sent} users.")
 
+    # ─── ADD POINTS ──────────────────────────────────────────────────
     elif cmd == "/addpoints" and len(parts) == 3:
         try:
             target_id = int(parts[1])
@@ -621,6 +628,7 @@ def handle_admin(chat_id, user_id, text):
         except ValueError:
             send_message(chat_id, "❌ Invalid ID or points.")
 
+    # ─── BOT STATS ────────────────────────────────────────────────────
     elif cmd == "/stats":
         stats = db.get_stats()
         send_message(
@@ -632,17 +640,34 @@ def handle_admin(chat_id, user_id, text):
             f"📦 Total Items: {stats[3]}"
         )
 
+    # ─── TOTAL USERS ──────────────────────────────────────────────────
+    elif cmd == "/users":
+        db.cursor.execute("SELECT user_id, username, first_name, points FROM users ORDER BY points DESC")
+        users = db.cursor.fetchall()
+        if not users:
+            send_message(chat_id, "📊 No users yet.")
+            return
+        msg = "👥 *All Users*\n\n"
+        for uid, username, first_name, points in users[:50]:
+            name = first_name or username or f"User_{uid}"
+            msg += f"• {name} — {points} pts [ID: {uid}]\n"
+        if len(users) > 50:
+            msg += f"\n... and {len(users) - 50} more"
+        send_message(chat_id, msg)
+
+    # ─── HELP ──────────────────────────────────────────────────────────
     else:
         send_message(
             chat_id,
-            "🔧 *Admin Commands*\n\n"
-            "/additem <name> <category> <cost> <content>\n"
-            "/listitems\n"
-            "/delitem <item_id>\n"
-            "/backup\n"
-            "/broadcast <msg>\n"
-            "/addpoints <user_id> <points>\n"
-            "/stats"
+            "🔧 *Owner Commands*\n\n"
+            "/additem <name> <category> <cost> <content> — Add BIN/tool\n"
+            "/listitems — List all items\n"
+            "/delitem <item_id> — Delete item\n"
+            "/backup — Download database\n"
+            "/broadcast <msg> — Send to all users\n"
+            "/addpoints <user_id> <points> — Add points\n"
+            "/stats — Bot statistics\n"
+            "/users — List all users"
         )
 
 # ─── MAIN LOOP ─────────────────────────────────────────────────────────
@@ -651,7 +676,7 @@ def main():
     print("🤖 Referral Bot started!")
     print(f"📱 Bot: @{BOT_USERNAME}")
     print(f"📢 Channel: {CHANNEL_LINK}")
-    print(f"👤 Admin ID: {ADMINS[0]}")
+    print(f"👤 Owner ID: {OWNER[0]}")
     print("="*50)
     print("⏳ Waiting for messages...")
     last_update = 0
