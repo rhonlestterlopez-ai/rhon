@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-
+import os
 import sqlite3
 import requests
 import time
@@ -26,19 +25,27 @@ API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
 # ============================================================
+# DELETE OLD DATABASE
+# ============================================================
+
+if os.path.exists(DB_FILE):
+    print("🗑️ Deleting old database...")
+    os.remove(DB_FILE)
+
+print("🆕 Creating fresh database...")
+
+
+# ============================================================
 # DATABASE
 # ============================================================
 
 class Database:
 
     def __init__(self):
+
         self.conn = sqlite3.connect(
             DB_FILE,
             check_same_thread=False
-        )
-
-        self.conn.execute(
-            "PRAGMA journal_mode=WAL"
         )
 
         self.init_db()
@@ -46,7 +53,7 @@ class Database:
     def init_db(self):
 
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
@@ -57,33 +64,8 @@ class Database:
             )
         """)
 
-        # Automatic migration for old database
-        columns = {
-            row[1]
-            for row in self.conn.execute(
-                "PRAGMA table_info(users)"
-            ).fetchall()
-        }
-
-        migrations = {
-            "username": "TEXT",
-            "first_name": "TEXT",
-            "referred_by": "INTEGER",
-            "referral_count": "INTEGER DEFAULT 0",
-            "points": "INTEGER DEFAULT 0"
-        }
-
-        for column, definition in migrations.items():
-
-            if column not in columns:
-
-                self.conn.execute(
-                    f"ALTER TABLE users "
-                    f"ADD COLUMN {column} {definition}"
-                )
-
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS referral_log (
+            CREATE TABLE referral_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 referrer_id INTEGER NOT NULL,
                 referred_id INTEGER UNIQUE NOT NULL,
@@ -93,9 +75,9 @@ class Database:
 
         self.conn.commit()
 
-    # ========================================================
-    # USERS
-    # ========================================================
+    # --------------------------------------------------------
+    # USER
+    # --------------------------------------------------------
 
     def get_user(self, user_id):
 
@@ -119,20 +101,23 @@ class Database:
             "username": row[1],
             "first_name": row[2],
             "referred_by": row[3],
-            "referral_count": row[4] or 0,
-            "points": row[5] or 0
+            "referral_count": row[4],
+            "points": row[5]
         }
 
     def user_exists(self, user_id):
 
-        return self.conn.execute(
-            "SELECT 1 FROM users WHERE user_id = ?",
-            (user_id,)
-        ).fetchone() is not None
+        row = self.conn.execute("""
+            SELECT user_id
+            FROM users
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
 
-    # ========================================================
-    # REGISTER
-    # ========================================================
+        return row is not None
+
+    # --------------------------------------------------------
+    # REGISTER USER
+    # --------------------------------------------------------
 
     def register_user(
         self,
@@ -142,74 +127,28 @@ class Database:
         referrer_id=None
     ):
 
+        # Already registered
         if self.user_exists(user_id):
             return "existing"
 
-        # Normal registration
-        if not referrer_id:
-
-            self.conn.execute("""
-                INSERT INTO users (
-                    user_id,
-                    username,
-                    first_name
-                )
-                VALUES (?, ?, ?)
-            """, (
-                user_id,
-                username,
-                first_name
-            ))
-
-            self.conn.commit()
-
-            return "registered"
-
-        # Self referral
+        # Anti-self-referral
         if referrer_id == user_id:
+            referrer_id = None
 
-            self.conn.execute("""
-                INSERT INTO users (
-                    user_id,
-                    username,
-                    first_name
-                )
-                VALUES (?, ?, ?)
-            """, (
-                user_id,
-                username,
-                first_name
-            ))
+        # Referrer must exist
+        valid_referrer = False
 
-            self.conn.commit()
+        if referrer_id:
 
-            return "self"
+            valid_referrer = self.user_exists(
+                referrer_id
+            )
 
-        # Referrer doesn't exist
-        if not self.user_exists(referrer_id):
-
-            self.conn.execute("""
-                INSERT INTO users (
-                    user_id,
-                    username,
-                    first_name
-                )
-                VALUES (?, ?, ?)
-            """, (
-                user_id,
-                username,
-                first_name
-            ))
-
-            self.conn.commit()
-
-            return "invalid_referrer"
-
-        # Atomic referral transaction
         try:
 
             self.conn.execute("BEGIN")
 
+            # Create user
             self.conn.execute("""
                 INSERT INTO users (
                     user_id,
@@ -220,49 +159,69 @@ class Database:
                 VALUES (?, ?, ?, ?)
             """, (
                 user_id,
-                username,
-                first_name,
+                username or "",
+                first_name or "",
                 referrer_id
+                if valid_referrer
+                else None
             ))
 
-            self.conn.execute("""
-                INSERT INTO referral_log (
+            # Referral reward
+            if valid_referrer:
+
+                self.conn.execute("""
+                    INSERT INTO referral_log (
+                        referrer_id,
+                        referred_id
+                    )
+                    VALUES (?, ?)
+                """, (
                     referrer_id,
-                    referred_id
-                )
-                VALUES (?, ?)
-            """, (
-                referrer_id,
-                user_id
-            ))
+                    user_id
+                ))
 
-            self.conn.execute("""
-                UPDATE users
-                SET
-                    referral_count =
-                        referral_count + 1,
-                    points =
-                        points + 1
-                WHERE user_id = ?
-            """, (referrer_id,))
+                self.conn.execute("""
+                    UPDATE users
+                    SET
+                        referral_count =
+                            referral_count + 1,
+                        points =
+                            points + 1
+                    WHERE user_id = ?
+                """, (
+                    referrer_id,
+                ))
 
             self.conn.commit()
 
-            return "referred"
+            if valid_referrer:
+                return "referred"
+
+            if referrer_id:
+                return "invalid_referrer"
+
+            return "registered"
 
         except Exception as e:
 
             self.conn.rollback()
 
-            print("Referral error:", e)
+            print(
+                "REGISTER ERROR:",
+                e
+            )
 
             return "error"
 
-    # ========================================================
+    # --------------------------------------------------------
     # POINTS
-    # ========================================================
+    # --------------------------------------------------------
 
-    def add_points(self, user_id, amount):
+    def add_points(
+        self,
+        user_id,
+        amount
+    ):
 
         self.conn.execute("""
             UPDATE users
@@ -275,11 +234,11 @@ class Database:
 
         self.conn.commit()
 
-    # ========================================================
+    # --------------------------------------------------------
     # STATS
-    # ========================================================
+    # --------------------------------------------------------
 
-    def get_stats(self):
+    def stats(self):
 
         users = self.conn.execute(
             "SELECT COUNT(*) FROM users"
@@ -295,7 +254,7 @@ class Database:
 
         return users, referrals, points
 
-    def get_top_referrers(self, limit=10):
+    def top_referrers(self):
 
         return self.conn.execute("""
             SELECT
@@ -307,10 +266,10 @@ class Database:
             FROM users
             WHERE referral_count > 0
             ORDER BY referral_count DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+            LIMIT 10
+        """).fetchall()
 
-    def get_users(self, limit=50):
+    def all_users(self):
 
         return self.conn.execute("""
             SELECT
@@ -321,10 +280,10 @@ class Database:
                 referral_count
             FROM users
             ORDER BY points DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+            LIMIT 50
+        """).fetchall()
 
-    def get_all_user_ids(self):
+    def all_user_ids(self):
 
         return self.conn.execute(
             "SELECT user_id FROM users"
@@ -345,21 +304,22 @@ admin_sessions = set()
 # TELEGRAM API
 # ============================================================
 
-def telegram(method, data=None):
+def api(method, data=None):
 
     try:
 
-        response = requests.post(
+        r = requests.post(
             f"{API}/{method}",
             data=data or {},
             timeout=30
         )
 
-        result = response.json()
+        result = r.json()
 
         if not result.get("ok"):
+
             print(
-                "Telegram API error:",
+                "Telegram error:",
                 result
             )
 
@@ -368,7 +328,7 @@ def telegram(method, data=None):
     except Exception as e:
 
         print(
-            "Telegram request error:",
+            "API ERROR:",
             e
         )
 
@@ -378,7 +338,7 @@ def telegram(method, data=None):
 def send_message(
     chat_id,
     text,
-    reply_markup=None
+    keyboard=None
 ):
 
     data = {
@@ -386,12 +346,13 @@ def send_message(
         "text": text
     }
 
-    if reply_markup:
+    if keyboard:
+
         data["reply_markup"] = json.dumps(
-            reply_markup
+            keyboard
         )
 
-    return telegram(
+    return api(
         "sendMessage",
         data
     )
@@ -403,140 +364,159 @@ def answer_callback(
 ):
 
     data = {
-        "callback_query_id": callback_id
+        "callback_query_id":
+            callback_id
     }
 
     if text:
         data["text"] = text
 
-    return telegram(
+    return api(
         "answerCallbackQuery",
         data
     )
 
 
-def edit_message(
-    chat_id,
-    message_id,
-    text,
-    reply_markup=None
-):
-
-    data = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text
-    }
-
-    if reply_markup:
-        data["reply_markup"] = json.dumps(
-            reply_markup
-        )
-
-    return telegram(
-        "editMessageText",
-        data
-    )
-
-
 # ============================================================
-# CHANNEL MEMBERSHIP
+# CHANNEL CHECK
 # ============================================================
 
 def is_member(user_id):
 
-    result = telegram(
+    result = api(
         "getChatMember",
         {
-            "chat_id": f"@{CHANNEL_USERNAME}",
-            "user_id": user_id
+            "chat_id":
+                f"@{CHANNEL_USERNAME}",
+            "user_id":
+                user_id
         }
     )
 
-    if not result or not result.get("ok"):
+    if not result:
         return False
 
-    status = result["result"].get(
+    if not result.get("ok"):
+        return False
+
+    status = result[
+        "result"
+    ].get(
         "status",
         ""
     )
 
-    return status in [
+    return status in (
         "member",
         "administrator",
         "creator"
-    ]
+    )
 
 
 def join_keyboard():
 
     return {
         "inline_keyboard": [
+
             [
                 {
-                    "text": "📢 Join Channel",
-                    "url": CHANNEL_LINK
+                    "text":
+                        "📢 Join Channel",
+                    "url":
+                        CHANNEL_LINK
                 }
             ],
+
             [
                 {
-                    "text": "✅ I've Joined",
-                    "callback_data": "check_join"
+                    "text":
+                        "✅ I've Joined",
+                    "callback_data":
+                        "check_join"
                 }
             ]
+
         ]
     }
 
 
 # ============================================================
-# MAIN MENU
+# USER MENU
 # ============================================================
 
 def menu_keyboard():
 
     return {
         "inline_keyboard": [
+
             [
                 {
-                    "text": "📢 Referrals",
-                    "callback_data": "referrals"
+                    "text":
+                        "📢 My Referrals",
+                    "callback_data":
+                        "referrals"
                 }
             ],
+
             [
                 {
-                    "text": "📊 My Stats",
-                    "callback_data": "stats"
+                    "text":
+                        "📊 My Stats",
+                    "callback_data":
+                        "stats"
                 }
             ],
+
             [
                 {
-                    "text": "👑 Admin Panel",
-                    "callback_data": "admin_panel"
+                    "text":
+                        "👑 Admin Panel",
+                    "callback_data":
+                        "admin_panel"
                 }
             ]
+
         ]
     }
 
 
-def send_menu(chat_id, user_id):
+def send_menu(
+    chat_id,
+    user_id
+):
 
-    user = db.get_user(user_id)
+    user = db.get_user(
+        user_id
+    )
 
     if not user:
+
         send_message(
             chat_id,
-            "❌ Please use /start first."
+            "❌ Use /start first."
         )
+
         return
 
     send_message(
+
         chat_id,
+
         f"🏦 *Referral Bot*\n\n"
-        f"👤 {user['first_name'] or 'User'}\n"
-        f"⭐ Points: {user['points']}\n"
-        f"👥 Referrals: {user['referral_count']}\n\n"
-        f"Invite friends to earn points.",
-        reply_markup=menu_keyboard()
+
+        f"👤 "
+        f"{user['first_name'] or 'User'}\n"
+
+        f"⭐ Points: "
+        f"{user['points']}\n"
+
+        f"👥 Referrals: "
+        f"{user['referral_count']}\n\n"
+
+        f"Invite friends using "
+        f"your referral link.",
+
+        menu_keyboard()
     )
 
 
@@ -560,23 +540,35 @@ def handle_start(message):
         "User"
     )
 
-    # Must join channel first
+    # --------------------------------------------------------
+    # CHANNEL REQUIREMENT
+    # --------------------------------------------------------
+
     if not is_member(user_id):
 
         send_message(
+
             user_id,
+
             f"🔐 *Channel Required*\n\n"
-            f"You must join @{CHANNEL_USERNAME} "
-            f"before using the bot.\n\n"
-            f"1. Click Join Channel\n"
-            f"2. Join the channel\n"
-            f"3. Click I've Joined",
-            reply_markup=join_keyboard()
+
+            f"You must join "
+            f"@{CHANNEL_USERNAME} "
+            f"before using this bot.\n\n"
+
+            f"1️⃣ Join the channel\n"
+            f"2️⃣ Click I've Joined\n"
+            f"3️⃣ Use /start",
+
+            join_keyboard()
         )
 
         return
 
-    # Parse referral parameter
+    # --------------------------------------------------------
+    # GET REFERRAL ID
+    # --------------------------------------------------------
+
     text = message.get(
         "text",
         ""
@@ -600,10 +592,18 @@ def handle_start(message):
 
             referrer_id = None
 
-    # Existing user
-    existing = db.get_user(user_id)
+    print(
+        f"START user={user_id} "
+        f"referrer={referrer_id}"
+    )
 
-    if existing:
+    # --------------------------------------------------------
+    # ALREADY REGISTERED
+    # --------------------------------------------------------
+
+    if db.user_exists(
+        user_id
+    ):
 
         send_menu(
             user_id,
@@ -612,46 +612,91 @@ def handle_start(message):
 
         return
 
-    # Register
+    # --------------------------------------------------------
+    # REGISTER
+    # --------------------------------------------------------
+
     result = db.register_user(
+
         user_id,
+
         username,
+
         first_name,
+
         referrer_id
     )
 
-    # Successful referral
-    if result == "referred":
+    print(
+        "Registration result:",
+        result
+    )
 
-        send_message(
-            user_id,
-            "🎉 *Welcome!*\n\n"
-            "You joined through a referral link."
-        )
+    # --------------------------------------------------------
+    # SUCCESSFUL REFERRAL
+    # --------------------------------------------------------
+
+    if result == "referred":
 
         referrer = db.get_user(
             referrer_id
         )
 
+        send_message(
+
+            user_id,
+
+            "🎉 *Welcome!*\n\n"
+
+            "You joined using "
+            "a referral link.\n\n"
+
+            "Your referrer received "
+            "+1 point."
+        )
+
         if referrer:
 
             send_message(
+
                 referrer_id,
+
                 f"🎉 *New Referral!*\n\n"
-                f"{first_name} joined using "
-                f"your referral link.\n\n"
+
+                f"{first_name} joined "
+                f"using your link.\n\n"
+
                 f"👥 Referrals: "
                 f"{referrer['referral_count']}\n"
+
                 f"⭐ Points: "
                 f"{referrer['points']}"
             )
 
+    elif result == "invalid_referrer":
+
+        send_message(
+
+            user_id,
+
+            "⚠️ The referral link is "
+            "invalid or the referrer "
+            "is not registered.\n\n"
+
+            "Your account was still "
+            "created normally."
+        )
+
     else:
 
         send_message(
+
             user_id,
-            f"🎉 *Welcome, {first_name}!*\n\n"
-            f"Invite friends to earn points."
+
+            f"🎉 *Welcome, "
+            f"{first_name}!*\n\n"
+
+            "You are now registered."
         )
 
     send_menu(
@@ -664,18 +709,22 @@ def handle_start(message):
 # REFERRAL PAGE
 # ============================================================
 
-def handle_referrals(
+def show_referrals(
     chat_id,
     user_id
 ):
 
-    user = db.get_user(user_id)
+    user = db.get_user(
+        user_id
+    )
 
     if not user:
+
         send_message(
             chat_id,
             "❌ Use /start first."
         )
+
         return
 
     link = (
@@ -685,120 +734,120 @@ def handle_referrals(
     )
 
     send_message(
+
         chat_id,
-        f"🎁 *Referral Stats*\n\n"
+
+        f"🎁 *Your Referral Stats*\n\n"
+
         f"👥 Referrals: "
         f"{user['referral_count']}\n"
+
         f"⭐ Points: "
         f"{user['points']}\n\n"
+
         f"🔗 *Your referral link:*\n"
         f"{link}\n\n"
-        f"Share it with your friends!"
+
+        f"Share this link with "
+        f"your friends!"
     )
 
 
 # ============================================================
-# ADMIN PANEL
+# ADMIN
 # ============================================================
 
 def admin_keyboard():
 
     return {
         "inline_keyboard": [
+
             [
                 {
-                    "text": "📊 Statistics",
-                    "callback_data": "admin_stats"
+                    "text":
+                        "📊 Statistics",
+                    "callback_data":
+                        "admin_stats"
                 }
             ],
+
             [
                 {
-                    "text": "🏆 Top Referrers",
-                    "callback_data": "admin_top"
+                    "text":
+                        "🏆 Top Referrers",
+                    "callback_data":
+                        "admin_top"
                 }
             ],
+
             [
                 {
-                    "text": "👥 Users",
-                    "callback_data": "admin_users"
+                    "text":
+                        "👥 Users",
+                    "callback_data":
+                        "admin_users"
                 }
             ],
+
             [
                 {
-                    "text": "⭐ Add Points",
-                    "callback_data": "admin_addpoints"
+                    "text":
+                        "⭐ Add Points",
+                    "callback_data":
+                        "admin_addpoints"
                 }
             ],
+
             [
                 {
-                    "text": "📢 Broadcast",
-                    "callback_data": "admin_broadcast"
+                    "text":
+                        "📢 Broadcast",
+                    "callback_data":
+                        "admin_broadcast"
                 }
             ],
+
             [
                 {
-                    "text": "🚪 Logout",
-                    "callback_data": "admin_logout"
+                    "text":
+                        "🚪 Logout",
+                    "callback_data":
+                        "admin_logout"
                 }
             ]
+
         ]
     }
 
 
-def show_admin_panel(chat_id):
+def admin_panel(
+    chat_id
+):
 
     send_message(
+
         chat_id,
+
         "👑 *ADMIN PANEL*\n\n"
-        "Choose an action:",
-        reply_markup=admin_keyboard()
+        "Choose an option:",
+
+        admin_keyboard()
     )
 
 
 # ============================================================
-# ADMIN COMMAND
+# CALLBACK HANDLER
 # ============================================================
 
-def handle_admin_command(
-    chat_id,
-    user_id
-):
-
-    if user_id != ADMIN_ID:
-
-        send_message(
-            chat_id,
-            "❌ Unauthorized."
-        )
-
-        return
-
-    if user_id in admin_sessions:
-
-        show_admin_panel(
-            chat_id
-        )
-
-    else:
-
-        send_message(
-            chat_id,
-            "🔐 *Admin Login*\n\n"
-            "Send the admin password."
-        )
-
-
-# ============================================================
-# CALLBACKS
-# ============================================================
-
-def handle_callback(query):
+def callback_handler(query):
 
     callback_id = query["id"]
 
     data = query["data"]
 
-    user_id = query["from"]["id"]
+    user_id = query[
+        "from"
+    ]["id"]
 
     message = query.get(
         "message"
@@ -807,29 +856,31 @@ def handle_callback(query):
     if not message:
         return
 
-    chat_id = message["chat"]["id"]
-
-    message_id = message["message_id"]
+    chat_id = message[
+        "chat"
+    ]["id"]
 
     # --------------------------------------------------------
-    # JOIN CHECK
+    # CHECK JOIN
     # --------------------------------------------------------
 
     if data == "check_join":
 
-        if is_member(user_id):
+        if is_member(
+            user_id
+        ):
 
             answer_callback(
                 callback_id,
                 "✅ Membership verified!"
             )
 
-            edit_message(
+            send_message(
+
                 chat_id,
-                message_id,
+
                 "✅ *Verified!*\n\n"
-                "You can now use the bot.\n\n"
-                "Send /start"
+                "Now send /start."
             )
 
         else:
@@ -842,7 +893,7 @@ def handle_callback(query):
         return
 
     # --------------------------------------------------------
-    # REFERRALS
+    # USER REFERRALS
     # --------------------------------------------------------
 
     if data == "referrals":
@@ -851,7 +902,7 @@ def handle_callback(query):
             callback_id
         )
 
-        handle_referrals(
+        show_referrals(
             chat_id,
             user_id
         )
@@ -875,10 +926,14 @@ def handle_callback(query):
         if user:
 
             send_message(
+
                 chat_id,
+
                 f"📊 *Your Stats*\n\n"
+
                 f"👥 Referrals: "
                 f"{user['referral_count']}\n"
+
                 f"⭐ Points: "
                 f"{user['points']}"
             )
@@ -886,7 +941,7 @@ def handle_callback(query):
         return
 
     # --------------------------------------------------------
-    # ADMIN PANEL
+    # ADMIN AUTH
     # --------------------------------------------------------
 
     if data == "admin_panel":
@@ -907,22 +962,20 @@ def handle_callback(query):
         if user_id not in admin_sessions:
 
             send_message(
+
                 chat_id,
+
                 "🔐 You are not logged in.\n\n"
-                "Use /admin and enter the password."
+                "Use /admin."
             )
 
             return
 
-        show_admin_panel(
+        admin_panel(
             chat_id
         )
 
         return
-
-    # --------------------------------------------------------
-    # ADMIN AUTH CHECK
-    # --------------------------------------------------------
 
     if user_id != ADMIN_ID:
 
@@ -937,7 +990,7 @@ def handle_callback(query):
 
         answer_callback(
             callback_id,
-            "🔐 Login required."
+            "❌ Login required."
         )
 
         return
@@ -952,27 +1005,26 @@ def handle_callback(query):
 
     if data == "admin_stats":
 
-        users, referrals, points = (
-            db.get_stats()
-        )
+        users, refs, points = db.stats()
 
         send_message(
+
             chat_id,
-            f"📊 *ADMIN STATISTICS*\n\n"
-            f"👤 Total Users: {users}\n"
-            f"👥 Total Referrals: {referrals}\n"
-            f"⭐ Total Points: {points}"
+
+            f"📊 *BOT STATISTICS*\n\n"
+
+            f"👤 Users: {users}\n"
+            f"👥 Referrals: {refs}\n"
+            f"⭐ Points: {points}"
         )
 
     # --------------------------------------------------------
-    # TOP REFERRERS
+    # TOP
     # --------------------------------------------------------
 
     elif data == "admin_top":
 
-        top = db.get_top_referrers(
-            10
-        )
+        top = db.top_referrers()
 
         text = (
             "🏆 *TOP REFERRERS*\n\n"
@@ -990,21 +1042,26 @@ def handle_callback(query):
             ):
 
                 uid = row[0]
+
                 username = row[1]
+
                 first_name = row[2]
+
                 refs = row[3]
+
                 points = row[4]
 
                 name = (
                     f"@{username}"
                     if username
-                    else first_name or str(uid)
+                    else first_name
+                    or str(uid)
                 )
 
                 text += (
                     f"{i}. {name}\n"
-                    f"   👥 {refs} referrals"
-                    f" | ⭐ {points} points\n\n"
+                    f"👥 {refs} | "
+                    f"⭐ {points}\n\n"
                 )
 
         send_message(
@@ -1018,33 +1075,34 @@ def handle_callback(query):
 
     elif data == "admin_users":
 
-        users = db.get_users(
-            50
-        )
+        users = db.all_users()
 
-        text = (
-            "👥 *USERS*\n\n"
-        )
+        text = "👥 *USERS*\n\n"
 
         for row in users:
 
             uid = row[0]
+
             username = row[1]
+
             first_name = row[2]
+
             points = row[3]
+
             refs = row[4]
 
             name = (
                 f"@{username}"
                 if username
-                else first_name or str(uid)
+                else first_name
+                or str(uid)
             )
 
             text += (
                 f"• {name}\n"
-                f"  ID: {uid}\n"
-                f"  ⭐ {points} pts"
-                f" | 👥 {refs} refs\n\n"
+                f"ID: `{uid}`\n"
+                f"⭐ {points} | "
+                f"👥 {refs}\n\n"
             )
 
         send_message(
@@ -1059,10 +1117,14 @@ def handle_callback(query):
     elif data == "admin_addpoints":
 
         send_message(
+
             chat_id,
+
             "⭐ *Add Points*\n\n"
-            "Send:\n"
+
+            "Use:\n"
             "`/addpoints USER_ID AMOUNT`\n\n"
+
             "Example:\n"
             "`/addpoints 123456789 5`"
         )
@@ -1074,10 +1136,13 @@ def handle_callback(query):
     elif data == "admin_broadcast":
 
         send_message(
+
             chat_id,
+
             "📢 *Broadcast*\n\n"
-            "Send:\n"
-            "`/broadcast Your message here`"
+
+            "Use:\n"
+            "`/broadcast Your message`"
         )
 
     # --------------------------------------------------------
@@ -1097,10 +1162,10 @@ def handle_callback(query):
 
 
 # ============================================================
-# TEXT COMMANDS
+# MESSAGE HANDLER
 # ============================================================
 
-def handle_message(message):
+def message_handler(message):
 
     user = message["from"]
 
@@ -1126,7 +1191,12 @@ def handle_message(message):
             user_id
         )
 
-        show_admin_panel(
+        send_message(
+            chat_id,
+            "✅ Admin login successful."
+        )
+
+        admin_panel(
             chat_id
         )
 
@@ -1152,17 +1222,22 @@ def handle_message(message):
 
     if text == "/referrals":
 
-        if not is_member(user_id):
+        if not is_member(
+            user_id
+        ):
 
             send_message(
+
                 chat_id,
-                "🔐 Please join the channel first.",
-                reply_markup=join_keyboard()
+
+                "🔐 Join the channel first.",
+
+                join_keyboard()
             )
 
             return
 
-        handle_referrals(
+        show_referrals(
             chat_id,
             user_id
         )
@@ -1189,10 +1264,14 @@ def handle_message(message):
             return
 
         send_message(
+
             chat_id,
+
             f"📊 *Your Stats*\n\n"
+
             f"👥 Referrals: "
             f"{user['referral_count']}\n"
+
             f"⭐ Points: "
             f"{user['points']}"
         )
@@ -1205,10 +1284,30 @@ def handle_message(message):
 
     if text == "/admin":
 
-        handle_admin_command(
-            chat_id,
-            user_id
-        )
+        if user_id != ADMIN_ID:
+
+            send_message(
+                chat_id,
+                "❌ Unauthorized."
+            )
+
+            return
+
+        if user_id in admin_sessions:
+
+            admin_panel(
+                chat_id
+            )
+
+        else:
+
+            send_message(
+
+                chat_id,
+
+                "🔐 *Admin Login*\n\n"
+                "Send the admin password."
+            )
 
         return
 
@@ -1237,7 +1336,9 @@ def handle_message(message):
         if len(parts) != 3:
 
             send_message(
+
                 chat_id,
+
                 "Usage:\n"
                 "/addpoints USER_ID AMOUNT"
             )
@@ -1246,7 +1347,7 @@ def handle_message(message):
 
         try:
 
-            target_id = int(
+            target = int(
                 parts[1]
             )
 
@@ -1254,15 +1355,29 @@ def handle_message(message):
                 parts[2]
             )
 
+            if not db.user_exists(
+                target
+            ):
+
+                send_message(
+                    chat_id,
+                    "❌ User not found."
+                )
+
+                return
+
             db.add_points(
-                target_id,
+                target,
                 amount
             )
 
             send_message(
+
                 chat_id,
-                f"✅ Added {amount} points "
-                f"to {target_id}."
+
+                f"✅ Added "
+                f"{amount} points "
+                f"to {target}."
             )
 
         except ValueError:
@@ -1294,91 +1409,110 @@ def handle_message(message):
 
             return
 
-        broadcast_text = text[
+        broadcast = text[
             len("/broadcast"):
         ].strip()
 
-        if not broadcast_text:
+        if not broadcast:
 
             send_message(
                 chat_id,
-                "Usage:\n"
-                "/broadcast Your message"
+                "Usage: /broadcast message"
             )
 
             return
 
-        users = db.get_all_user_ids()
+        users = db.all_user_ids()
 
         sent = 0
 
         for row in users:
 
-            target_id = row[0]
+            target = row[0]
 
             result = send_message(
-                target_id,
+
+                target,
+
                 f"📢 *Announcement*\n\n"
-                f"{broadcast_text}"
+                f"{broadcast}"
             )
 
             if result and result.get("ok"):
 
                 sent += 1
 
-            time.sleep(0.05)
+            time.sleep(
+                0.05
+            )
 
         send_message(
+
             chat_id,
-            f"✅ Broadcast finished.\n\n"
+
+            f"✅ Broadcast complete.\n\n"
             f"Sent: {sent}\n"
-            f"Total users: {len(users)}"
+            f"Users: {len(users)}"
         )
 
-        return
-
 
 # ============================================================
-# UPDATE LOOP
+# GET UPDATES
 # ============================================================
 
-def get_updates(offset=None):
+def get_updates(
+    offset=None
+):
 
     data = {
         "timeout": 30,
-        "allowed_updates": '["message","callback_query"]'
+        "allowed_updates":
+            json.dumps([
+                "message",
+                "callback_query"
+            ])
     }
 
     if offset is not None:
 
         data["offset"] = offset
 
-    return telegram(
+    return api(
         "getUpdates",
         data
     )
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
 
+    print()
     print(
-        "======================================"
+        "================================"
     )
-
     print(
-        "🤖 REFERRAL BOT STARTED"
+        "🤖 RHON REFERRAL BOT"
     )
-
+    print(
+        "================================"
+    )
     print(
         f"Bot: @{BOT_USERNAME}"
     )
-
     print(
         f"Channel: @{CHANNEL_USERNAME}"
     )
-
     print(
-        "======================================"
+        f"Admin ID: {ADMIN_ID}"
+    )
+    print(
+        "Database: FRESH"
+    )
+    print(
+        "================================"
     )
 
     offset = None
@@ -1392,7 +1526,9 @@ def main():
             )
 
             if not result:
+
                 time.sleep(2)
+
                 continue
 
             updates = result.get(
@@ -1410,20 +1546,25 @@ def main():
 
                     if "message" in update:
 
-                        handle_message(
+                        message_handler(
                             update["message"]
                         )
 
-                    elif "callback_query" in update:
+                    elif (
+                        "callback_query"
+                        in update
+                    ):
 
-                        handle_callback(
-                            update["callback_query"]
+                        callback_handler(
+                            update[
+                                "callback_query"
+                            ]
                         )
 
                 except Exception as e:
 
                     print(
-                        "Update error:",
+                        "UPDATE ERROR:",
                         e
                     )
 
@@ -1438,7 +1579,7 @@ def main():
         except Exception as e:
 
             print(
-                "Main loop error:",
+                "MAIN ERROR:",
                 e
             )
 
