@@ -4,7 +4,6 @@
 ✦ PREMIUM BIN VAULT ✦
 Bot: @Rhonreferbot
 Channel: @PythonPrivateTools
-Referral System: Fully Functional
 """
 
 import os
@@ -23,7 +22,7 @@ CHANNEL_LINK = "https://t.me/PythonPrivateTools"
 CHANNEL_USERNAME = "PythonPrivateTools"
 ADMIN_PASSWORD = "RHONLESTTERLOPEZ"
 VERIFIER = "Masitassss"
-ADMIN_ID = 8726474142  # Your Telegram ID
+ADMIN_ID = 8726474142
 
 # ─── DATABASE ──────────────────────────────────────────────────────────
 
@@ -34,7 +33,7 @@ class Database:
         self._init_db()
 
     def _init_db(self):
-        # Users table with referral fields
+        # Users table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -57,7 +56,7 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        # Referral log (for tracking)
+        # Referral log
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS referral_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +100,6 @@ class Database:
         )
         self.conn.commit()
 
-        # If referred_by is provided, update referrer's count
         if referred_by:
             self.cursor.execute(
                 "UPDATE users SET referral_count = referral_count + 1, points = points + 1 WHERE user_id = ?",
@@ -232,7 +230,6 @@ def is_member(user_id):
 admin_sessions = {}
 
 def handle_start(chat_id, user_id, username, first_name, args):
-    # ─── CHANNEL VERIFICATION ────────────────────────────────────────
     if not is_member(user_id):
         keyboard = {
             "inline_keyboard": [
@@ -248,7 +245,7 @@ def handle_start(chat_id, user_id, username, first_name, args):
         )
         return
 
-    # ─── ⭐ REFERRAL SYSTEM ⭐ ──────────────────────────────────────
+    # ─── REFERRAL SYSTEM ──────────────────────────────────────────────
     referrer_id = None
     if args:
         try:
@@ -256,10 +253,8 @@ def handle_start(chat_id, user_id, username, first_name, args):
         except ValueError:
             pass
 
-    # Check if user already exists
     existing_user = db.get_user(user_id)
     if existing_user:
-        # User exists — no referral credit
         keyboard = {
             "inline_keyboard": [
                 [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
@@ -278,16 +273,12 @@ def handle_start(chat_id, user_id, username, first_name, args):
         )
         return
 
-    # ─── NEW USER — Process Referral ──────────────────────────────
     valid_referral = False
-
-    if referrer_id and referrer_id != user_id:  # Anti-self-referral
+    if referrer_id and referrer_id != user_id:
         referrer = db.get_user(referrer_id)
         if referrer:
-            # Valid referral!
             valid_referral = True
             db.add_user(user_id, username, first_name, referrer_id)
-            # Notify referrer
             send_message(
                 referrer_id,
                 f"🎉 *You got a new referral!*\n\n"
@@ -296,15 +287,12 @@ def handle_start(chat_id, user_id, username, first_name, args):
                 f"👥 Total referrals: {referrer['referral_count'] + 1}"
             )
         else:
-            # Referrer doesn't exist — create user without referral
             db.add_user(user_id, username, first_name)
     else:
-        # No referral or self-referral — create user without referral
         db.add_user(user_id, username, first_name)
 
     user_data = db.get_user(user_id)
 
-    # ─── WELCOME MESSAGE ─────────────────────────────────────────────
     keyboard = {
         "inline_keyboard": [
             [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
@@ -326,10 +314,7 @@ def handle_start(chat_id, user_id, username, first_name, args):
     )
 
     if valid_referral:
-        welcome_msg = (
-            f"🎉 *You were invited by someone!*\n\n"
-            f"{welcome_msg}"
-        )
+        welcome_msg = f"🎉 *You were invited!*\n\n{welcome_msg}"
 
     send_message(chat_id, welcome_msg, reply_markup=keyboard)
 
@@ -421,10 +406,8 @@ def handle_callback(query):
 
     answer_callback(callback_id)
 
-    # ─── ⭐ REFERRALS COMMAND ⭐ ─────────────────────────────────────
     if data == "referrals":
-        # Get bot username dynamically
-        bot_username = BOT_USERNAME  # Fallback
+        bot_username = BOT_USERNAME
         try:
             r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe")
             if r.status_code == 200:
@@ -447,7 +430,6 @@ def handle_callback(query):
         )
         return
 
-    # ─── ADMIN STATS ──────────────────────────────────────────────────
     if data == "admin_stats":
         if user_id != ADMIN_ID:
             send_message(chat_id, "❌ Unauthorized.")
