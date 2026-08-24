@@ -10,7 +10,7 @@ import json
 
 BOT_TOKEN = "8542412067:AAHVQnk_uS2NG9AAlVkucPJuuu-s8ykEzZM"
 
-BOT_USERNAME = "Rhonreferbot"
+BOT_USERNAME = "Rhomreferbot"
 
 ADMIN_ID = 8726474142
 
