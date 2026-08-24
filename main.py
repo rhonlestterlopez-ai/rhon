@@ -1,59 +1,42 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+✦ PREMIUM BIN VAULT ✦
+Bot: @Rhonreferbot
+Channel: @PythonPrivateTools
+Referral System: Fully Functional
+"""
+
 import os
-import sqlite3
-import requests
-import time
 import json
+import sqlite3
+import random
+import string
+import time
+from datetime import datetime
+import requests
 
-# ============================================================
-# CONFIG
-# ============================================================
-
+# ─── CONFIG ──────────────────────────────────────────────────────────────
 BOT_TOKEN = "8542412067:AAHVQnk_uS2NG9AAlVkucPJuuu-s8ykEzZM"
-
-BOT_USERNAME = "Rhomreferbot"
-
-ADMIN_ID = 8726474142
-
-ADMIN_PASSWORD = "RHONLESTTERLOPEZ"
-
-CHANNEL_USERNAME = "PythonPrivateTools"
+BOT_USERNAME = "Rhonreferbot"
 CHANNEL_LINK = "https://t.me/PythonPrivateTools"
+CHANNEL_USERNAME = "PythonPrivateTools"
+ADMIN_PASSWORD = "RHONLESTTERLOPEZ"
+VERIFIER = "Masitassss"
+ADMIN_ID = 8726474142  # Your Telegram ID
 
-DB_FILE = "referral.db"
-
-API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-
-# ============================================================
-# DELETE OLD DATABASE
-# ============================================================
-
-if os.path.exists(DB_FILE):
-    print("🗑️ Deleting old database...")
-    os.remove(DB_FILE)
-
-print("🆕 Creating fresh database...")
-
-
-# ============================================================
-# DATABASE
-# ============================================================
+# ─── DATABASE ──────────────────────────────────────────────────────────
 
 class Database:
+    def __init__(self, db_path="referral.db"):
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self._init_db()
 
-    def __init__(self):
-
-        self.conn = sqlite3.connect(
-            DB_FILE,
-            check_same_thread=False
-        )
-
-        self.init_db()
-
-    def init_db(self):
-
-        self.conn.execute("""
-            CREATE TABLE users (
+    def _init_db(self):
+        # Users table with referral fields
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
@@ -62,1529 +45,652 @@ class Database:
                 points INTEGER DEFAULT 0,
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-
-        self.conn.execute("""
-            CREATE TABLE referral_log (
+        ''')
+        # Bin items table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bin_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                referrer_id INTEGER NOT NULL,
-                referred_id INTEGER UNIQUE NOT NULL,
+                name TEXT,
+                category TEXT,
+                content TEXT,
+                cost INTEGER DEFAULT 5,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Referral log (for tracking)
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS referral_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                referred_id INTEGER,
                 referred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-
+        ''')
         self.conn.commit()
 
-    # --------------------------------------------------------
-    # USER
-    # --------------------------------------------------------
+    # ─── USER METHODS ──────────────────────────────────────────────────
 
     def get_user(self, user_id):
-
-        row = self.conn.execute("""
-            SELECT
-                user_id,
-                username,
-                first_name,
-                referred_by,
-                referral_count,
-                points
-            FROM users
-            WHERE user_id = ?
-        """, (user_id,)).fetchone()
-
-        if not row:
-            return None
-
-        return {
-            "user_id": row[0],
-            "username": row[1],
-            "first_name": row[2],
-            "referred_by": row[3],
-            "referral_count": row[4],
-            "points": row[5]
-        }
+        self.cursor.execute(
+            "SELECT user_id, username, first_name, referred_by, referral_count, points FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        row = self.cursor.fetchone()
+        if row:
+            return {
+                "user_id": row[0],
+                "username": row[1],
+                "first_name": row[2],
+                "referred_by": row[3],
+                "referral_count": row[4],
+                "points": row[5]
+            }
+        return None
 
     def user_exists(self, user_id):
+        self.cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+        return self.cursor.fetchone() is not None
 
-        row = self.conn.execute("""
-            SELECT user_id
-            FROM users
-            WHERE user_id = ?
-        """, (user_id,)).fetchone()
-
-        return row is not None
-
-    # --------------------------------------------------------
-    # REGISTER USER
-    # --------------------------------------------------------
-
-    def register_user(
-        self,
-        user_id,
-        username,
-        first_name,
-        referrer_id=None
-    ):
-
-        # Already registered
+    def add_user(self, user_id, username, first_name, referred_by=None):
         if self.user_exists(user_id):
-            return "existing"
+            return self.get_user(user_id)
 
-        # Anti-self-referral
-        if referrer_id == user_id:
-            referrer_id = None
-
-        # Referrer must exist
-        valid_referrer = False
-
-        if referrer_id:
-
-            valid_referrer = self.user_exists(
-                referrer_id
-            )
-
-        try:
-
-            self.conn.execute("BEGIN")
-
-            # Create user
-            self.conn.execute("""
-                INSERT INTO users (
-                    user_id,
-                    username,
-                    first_name,
-                    referred_by
-                )
-                VALUES (?, ?, ?, ?)
-            """, (
-                user_id,
-                username or "",
-                first_name or "",
-                referrer_id
-                if valid_referrer
-                else None
-            ))
-
-            # Referral reward
-            if valid_referrer:
-
-                self.conn.execute("""
-                    INSERT INTO referral_log (
-                        referrer_id,
-                        referred_id
-                    )
-                    VALUES (?, ?)
-                """, (
-                    referrer_id,
-                    user_id
-                ))
-
-                self.conn.execute("""
-                    UPDATE users
-                    SET
-                        referral_count =
-                            referral_count + 1,
-                        points =
-                            points + 1
-                    WHERE user_id = ?
-                """, (
-                    referrer_id,
-                ))
-
-            self.conn.commit()
-
-            if valid_referrer:
-                return "referred"
-
-            if referrer_id:
-                return "invalid_referrer"
-
-            return "registered"
-
-        except Exception as e:
-
-            self.conn.rollback()
-
-            print(
-                "REGISTER ERROR:",
-                e
-            )
-
-            return "error"
-
-    # --------------------------------------------------------
-    # POINTS
-    # --------------------------------------------------------
-
-    def add_points(
-        self,
-        user_id,
-        amount
-    ):
-
-        self.conn.execute("""
-            UPDATE users
-            SET points = points + ?
-            WHERE user_id = ?
-        """, (
-            amount,
-            user_id
-        ))
-
+        self.cursor.execute(
+            "INSERT INTO users (user_id, username, first_name, referred_by) VALUES (?, ?, ?, ?)",
+            (user_id, username or "", first_name or "", referred_by)
+        )
         self.conn.commit()
 
-    # --------------------------------------------------------
-    # STATS
-    # --------------------------------------------------------
+        # If referred_by is provided, update referrer's count
+        if referred_by:
+            self.cursor.execute(
+                "UPDATE users SET referral_count = referral_count + 1, points = points + 1 WHERE user_id = ?",
+                (referred_by,)
+            )
+            self.cursor.execute(
+                "INSERT INTO referral_log (referrer_id, referred_id) VALUES (?, ?)",
+                (referred_by, user_id)
+            )
+            self.conn.commit()
 
-    def stats(self):
+        return self.get_user(user_id)
 
-        users = self.conn.execute(
-            "SELECT COUNT(*) FROM users"
-        ).fetchone()[0]
+    def add_points(self, user_id, amount):
+        self.cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (amount, user_id))
+        self.conn.commit()
 
-        referrals = self.conn.execute(
-            "SELECT COUNT(*) FROM referral_log"
-        ).fetchone()[0]
+    def get_top_referrers(self, limit=10):
+        self.cursor.execute(
+            "SELECT user_id, username, first_name, referral_count, points FROM users ORDER BY referral_count DESC LIMIT ?",
+            (limit,)
+        )
+        return self.cursor.fetchall()
 
-        points = self.conn.execute(
-            "SELECT COALESCE(SUM(points), 0) FROM users"
-        ).fetchone()[0]
+    def get_stats(self):
+        self.cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = self.cursor.fetchone()[0]
+        self.cursor.execute("SELECT COUNT(*) FROM referral_log")
+        total_referrals = self.cursor.fetchone()[0]
+        self.cursor.execute("SELECT SUM(points) FROM users")
+        total_points = self.cursor.fetchone()[0] or 0
+        self.cursor.execute("SELECT COUNT(*) FROM bin_items")
+        total_items = self.cursor.fetchone()[0]
+        return total_users, total_referrals, total_points, total_items
 
-        return users, referrals, points
+    # ─── BIN METHODS ────────────────────────────────────────────────────
 
-    def top_referrers(self):
+    def add_item(self, name, category, content, cost=5):
+        self.cursor.execute(
+            "INSERT INTO bin_items (name, category, content, cost) VALUES (?, ?, ?, ?)",
+            (name, category, content, cost)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
 
-        return self.conn.execute("""
-            SELECT
-                user_id,
-                username,
-                first_name,
-                referral_count,
-                points
-            FROM users
-            WHERE referral_count > 0
-            ORDER BY referral_count DESC
-            LIMIT 10
-        """).fetchall()
+    def get_items(self):
+        self.cursor.execute("SELECT id, name, category, cost FROM bin_items ORDER BY id DESC")
+        return self.cursor.fetchall()
 
-    def all_users(self):
+    def get_item(self, item_id):
+        self.cursor.execute("SELECT id, name, category, content, cost FROM bin_items WHERE id = ?", (item_id,))
+        return self.cursor.fetchone()
 
-        return self.conn.execute("""
-            SELECT
-                user_id,
-                username,
-                first_name,
-                points,
-                referral_count
-            FROM users
-            ORDER BY points DESC
-            LIMIT 50
-        """).fetchall()
+    def delete_item(self, item_id):
+        self.cursor.execute("DELETE FROM bin_items WHERE id = ?", (item_id,))
+        self.conn.commit()
 
-    def all_user_ids(self):
+    def delete_all_items(self):
+        self.cursor.execute("DELETE FROM bin_items")
+        self.conn.commit()
 
-        return self.conn.execute(
-            "SELECT user_id FROM users"
-        ).fetchall()
-
+    def close(self):
+        self.conn.close()
 
 db = Database()
 
+# ─── TELEGRAM API ──────────────────────────────────────────────────────
 
-# ============================================================
-# ADMIN SESSIONS
-# ============================================================
-
-admin_sessions = set()
-
-
-# ============================================================
-# TELEGRAM API
-# ============================================================
-
-def api(method, data=None):
-
+def send_message(chat_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
     try:
-
-        r = requests.post(
-            f"{API}/{method}",
-            data=data or {},
-            timeout=30
-        )
-
-        result = r.json()
-
-        if not result.get("ok"):
-
-            print(
-                "Telegram error:",
-                result
-            )
-
-        return result
-
+        requests.post(url, data=data, timeout=30)
     except Exception as e:
+        print(f"Error: {e}")
 
-        print(
-            "API ERROR:",
-            e
-        )
+def edit_message(chat_id, message_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+    data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
+    try:
+        requests.post(url, data=data, timeout=30)
+    except Exception:
+        pass
 
-        return None
-
-
-def send_message(
-    chat_id,
-    text,
-    keyboard=None
-):
-
-    data = {
-        "chat_id": chat_id,
-        "text": text
-    }
-
-    if keyboard:
-
-        data["reply_markup"] = json.dumps(
-            keyboard
-        )
-
-    return api(
-        "sendMessage",
-        data
-    )
-
-
-def answer_callback(
-    callback_id,
-    text=None
-):
-
-    data = {
-        "callback_query_id":
-            callback_id
-    }
-
+def answer_callback(callback_id, text=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+    data = {"callback_query_id": callback_id}
     if text:
         data["text"] = text
+    try:
+        requests.post(url, data=data, timeout=15)
+    except Exception:
+        pass
 
-    return api(
-        "answerCallbackQuery",
-        data
-    )
+def get_updates(offset=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    data = {"timeout": 10, "allowed_updates": ["message", "callback_query"]}
+    if offset:
+        data["offset"] = offset
+    try:
+        r = requests.post(url, data=data, timeout=15)
+        return r.json().get("result", [])
+    except Exception:
+        return []
 
-
-# ============================================================
-# CHANNEL CHECK
-# ============================================================
+# ─── CHECK CHANNEL MEMBERSHIP ─────────────────────────────────────────
 
 def is_member(user_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
+    data = {"chat_id": f"@{CHANNEL_USERNAME}", "user_id": user_id}
+    try:
+        r = requests.post(url, data=data, timeout=10)
+        if r.status_code == 200:
+            result = r.json()
+            if result.get("ok"):
+                status = result.get("result", {}).get("status", "")
+                return status in ["member", "administrator", "creator"]
+    except Exception:
+        pass
+    return False
 
-    result = api(
-        "getChatMember",
-        {
-            "chat_id":
-                f"@{CHANNEL_USERNAME}",
-            "user_id":
-                user_id
-        }
-    )
+# ─── HANDLERS ──────────────────────────────────────────────────────────
 
-    if not result:
-        return False
+admin_sessions = {}
 
-    if not result.get("ok"):
-        return False
-
-    status = result[
-        "result"
-    ].get(
-        "status",
-        ""
-    )
-
-    return status in (
-        "member",
-        "administrator",
-        "creator"
-    )
-
-
-def join_keyboard():
-
-    return {
-        "inline_keyboard": [
-
-            [
-                {
-                    "text":
-                        "📢 Join Channel",
-                    "url":
-                        CHANNEL_LINK
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "✅ I've Joined",
-                    "callback_data":
-                        "check_join"
-                }
-            ]
-
-        ]
-    }
-
-
-# ============================================================
-# USER MENU
-# ============================================================
-
-def menu_keyboard():
-
-    return {
-        "inline_keyboard": [
-
-            [
-                {
-                    "text":
-                        "📢 My Referrals",
-                    "callback_data":
-                        "referrals"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "📊 My Stats",
-                    "callback_data":
-                        "stats"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "👑 Admin Panel",
-                    "callback_data":
-                        "admin_panel"
-                }
-            ]
-
-        ]
-    }
-
-
-def send_menu(
-    chat_id,
-    user_id
-):
-
-    user = db.get_user(
-        user_id
-    )
-
-    if not user:
-
-        send_message(
-            chat_id,
-            "❌ Use /start first."
-        )
-
-        return
-
-    send_message(
-
-        chat_id,
-
-        f"🏦 *Referral Bot*\n\n"
-
-        f"👤 "
-        f"{user['first_name'] or 'User'}\n"
-
-        f"⭐ Points: "
-        f"{user['points']}\n"
-
-        f"👥 Referrals: "
-        f"{user['referral_count']}\n\n"
-
-        f"Invite friends using "
-        f"your referral link.",
-
-        menu_keyboard()
-    )
-
-
-# ============================================================
-# /START
-# ============================================================
-
-def handle_start(message):
-
-    user = message["from"]
-
-    user_id = user["id"]
-
-    username = user.get(
-        "username",
-        ""
-    )
-
-    first_name = user.get(
-        "first_name",
-        "User"
-    )
-
-    # --------------------------------------------------------
-    # CHANNEL REQUIREMENT
-    # --------------------------------------------------------
-
+def handle_start(chat_id, user_id, username, first_name, args):
+    # ─── CHANNEL VERIFICATION ────────────────────────────────────────
     if not is_member(user_id):
-
-        send_message(
-
-            user_id,
-
-            f"🔐 *Channel Required*\n\n"
-
-            f"You must join "
-            f"@{CHANNEL_USERNAME} "
-            f"before using this bot.\n\n"
-
-            f"1️⃣ Join the channel\n"
-            f"2️⃣ Click I've Joined\n"
-            f"3️⃣ Use /start",
-
-            join_keyboard()
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # GET REFERRAL ID
-    # --------------------------------------------------------
-
-    text = message.get(
-        "text",
-        ""
-    )
-
-    parts = text.split(
-        maxsplit=1
-    )
-
-    referrer_id = None
-
-    if len(parts) == 2:
-
-        try:
-
-            referrer_id = int(
-                parts[1].strip()
-            )
-
-        except ValueError:
-
-            referrer_id = None
-
-    print(
-        f"START user={user_id} "
-        f"referrer={referrer_id}"
-    )
-
-    # --------------------------------------------------------
-    # ALREADY REGISTERED
-    # --------------------------------------------------------
-
-    if db.user_exists(
-        user_id
-    ):
-
-        send_menu(
-            user_id,
-            user_id
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # REGISTER
-    # --------------------------------------------------------
-
-    result = db.register_user(
-
-        user_id,
-
-        username,
-
-        first_name,
-
-        referrer_id
-    )
-
-    print(
-        "Registration result:",
-        result
-    )
-
-    # --------------------------------------------------------
-    # SUCCESSFUL REFERRAL
-    # --------------------------------------------------------
-
-    if result == "referred":
-
-        referrer = db.get_user(
-            referrer_id
-        )
-
-        send_message(
-
-            user_id,
-
-            "🎉 *Welcome!*\n\n"
-
-            "You joined using "
-            "a referral link.\n\n"
-
-            "Your referrer received "
-            "+1 point."
-        )
-
-        if referrer:
-
-            send_message(
-
-                referrer_id,
-
-                f"🎉 *New Referral!*\n\n"
-
-                f"{first_name} joined "
-                f"using your link.\n\n"
-
-                f"👥 Referrals: "
-                f"{referrer['referral_count']}\n"
-
-                f"⭐ Points: "
-                f"{referrer['points']}"
-            )
-
-    elif result == "invalid_referrer":
-
-        send_message(
-
-            user_id,
-
-            "⚠️ The referral link is "
-            "invalid or the referrer "
-            "is not registered.\n\n"
-
-            "Your account was still "
-            "created normally."
-        )
-
-    else:
-
-        send_message(
-
-            user_id,
-
-            f"🎉 *Welcome, "
-            f"{first_name}!*\n\n"
-
-            "You are now registered."
-        )
-
-    send_menu(
-        user_id,
-        user_id
-    )
-
-
-# ============================================================
-# REFERRAL PAGE
-# ============================================================
-
-def show_referrals(
-    chat_id,
-    user_id
-):
-
-    user = db.get_user(
-        user_id
-    )
-
-    if not user:
-
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📢 Join Channel", "url": CHANNEL_LINK}],
+                [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
+            ]
+        }
         send_message(
             chat_id,
-            "❌ Use /start first."
+            f"🔐 *Join Our Channel First*\n\n"
+            f"Click below to join @{CHANNEL_USERNAME}, then press 'I've Joined!'",
+            reply_markup=keyboard
         )
-
         return
 
-    link = (
-        f"https://t.me/"
-        f"{BOT_USERNAME}"
-        f"?start={user_id}"
-    )
+    # ─── ⭐ REFERRAL SYSTEM ⭐ ──────────────────────────────────────
+    referrer_id = None
+    if args:
+        try:
+            referrer_id = int(args[0])
+        except ValueError:
+            pass
 
-    send_message(
-
-        chat_id,
-
-        f"🎁 *Your Referral Stats*\n\n"
-
-        f"👥 Referrals: "
-        f"{user['referral_count']}\n"
-
-        f"⭐ Points: "
-        f"{user['points']}\n\n"
-
-        f"🔗 *Your referral link:*\n"
-        f"{link}\n\n"
-
-        f"Share this link with "
-        f"your friends!"
-    )
-
-
-# ============================================================
-# ADMIN
-# ============================================================
-
-def admin_keyboard():
-
-    return {
-        "inline_keyboard": [
-
-            [
-                {
-                    "text":
-                        "📊 Statistics",
-                    "callback_data":
-                        "admin_stats"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "🏆 Top Referrers",
-                    "callback_data":
-                        "admin_top"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "👥 Users",
-                    "callback_data":
-                        "admin_users"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "⭐ Add Points",
-                    "callback_data":
-                        "admin_addpoints"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "📢 Broadcast",
-                    "callback_data":
-                        "admin_broadcast"
-                }
-            ],
-
-            [
-                {
-                    "text":
-                        "🚪 Logout",
-                    "callback_data":
-                        "admin_logout"
-                }
+    # Check if user already exists
+    existing_user = db.get_user(user_id)
+    if existing_user:
+        # User exists — no referral credit
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
+                [{"text": "📊 My Stats", "callback_data": "stats"}],
+                [{"text": "📢 Referrals", "callback_data": "referrals"}],
+                [{"text": "👑 Owner Panel", "callback_data": "owner_login"}],
             ]
+        }
+        send_message(
+            chat_id,
+            f"🏦 *Welcome back, {first_name}!*\n\n"
+            f"📊 Points: {existing_user['points']}\n"
+            f"👥 Referrals: {existing_user['referral_count']}\n\n"
+            f"💡 5 points = 1 BIN",
+            reply_markup=keyboard
+        )
+        return
 
+    # ─── NEW USER — Process Referral ──────────────────────────────
+    valid_referral = False
+
+    if referrer_id and referrer_id != user_id:  # Anti-self-referral
+        referrer = db.get_user(referrer_id)
+        if referrer:
+            # Valid referral!
+            valid_referral = True
+            db.add_user(user_id, username, first_name, referrer_id)
+            # Notify referrer
+            send_message(
+                referrer_id,
+                f"🎉 *You got a new referral!*\n\n"
+                f"{first_name} joined using your link.\n"
+                f"+1 point! (Total: {referrer['points'] + 1})\n"
+                f"👥 Total referrals: {referrer['referral_count'] + 1}"
+            )
+        else:
+            # Referrer doesn't exist — create user without referral
+            db.add_user(user_id, username, first_name)
+    else:
+        # No referral or self-referral — create user without referral
+        db.add_user(user_id, username, first_name)
+
+    user_data = db.get_user(user_id)
+
+    # ─── WELCOME MESSAGE ─────────────────────────────────────────────
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
+            [{"text": "📊 My Stats", "callback_data": "stats"}],
+            [{"text": "📢 Referrals", "callback_data": "referrals"}],
+            [{"text": "👑 Owner Panel", "callback_data": "owner_login"}],
         ]
     }
 
-
-def admin_panel(
-    chat_id
-):
-
-    send_message(
-
-        chat_id,
-
-        "👑 *ADMIN PANEL*\n\n"
-        "Choose an option:",
-
-        admin_keyboard()
+    welcome_msg = (
+        f"🏦 *Welcome to Premium BIN Vault!*\n\n"
+        f"💰 *GET BINs:*\n"
+        f"1️⃣ Invite friends using your referral link\n"
+        f"2️⃣ Each referral = 1 point\n"
+        f"3️⃣ 5 points = 1 BIN\n\n"
+        f"📊 Points: {user_data['points']}\n"
+        f"👥 Referrals: {user_data['referral_count']}\n\n"
+        f"💡 5 points = 1 BIN"
     )
 
+    if valid_referral:
+        welcome_msg = (
+            f"🎉 *You were invited by someone!*\n\n"
+            f"{welcome_msg}"
+        )
 
-# ============================================================
-# CALLBACK HANDLER
-# ============================================================
+    send_message(chat_id, welcome_msg, reply_markup=keyboard)
 
-def callback_handler(query):
-
-    callback_id = query["id"]
-
-    data = query["data"]
-
-    user_id = query[
-        "from"
-    ]["id"]
-
-    message = query.get(
-        "message"
-    )
-
-    if not message:
+def handle_menu(chat_id, user_id):
+    if not is_member(user_id):
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📢 Join Channel", "url": CHANNEL_LINK}],
+                [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
+            ]
+        }
+        send_message(chat_id, f"🔐 *Join Our Channel First*", reply_markup=keyboard)
         return
 
-    chat_id = message[
-        "chat"
-    ]["id"]
+    user_data = db.get_user(user_id)
+    if not user_data:
+        send_message(chat_id, "❌ Use /start first.")
+        return
 
-    # --------------------------------------------------------
-    # CHECK JOIN
-    # --------------------------------------------------------
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📦 Redeem BINs", "callback_data": "redeem"}],
+            [{"text": "📊 My Stats", "callback_data": "stats"}],
+            [{"text": "📢 Referrals", "callback_data": "referrals"}],
+            [{"text": "👑 Owner Panel", "callback_data": "owner_login"}],
+        ]
+    }
+    send_message(
+        chat_id,
+        f"📋 *Menu*\n\n"
+        f"👤 {user_data.get('first_name', 'User')}\n"
+        f"📊 Points: {user_data['points']}\n"
+        f"👥 Referrals: {user_data['referral_count']}\n"
+        f"💡 5 points = 1 BIN",
+        reply_markup=keyboard
+    )
+
+def show_owner_panel(chat_id):
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📦 Add BIN", "callback_data": "admin_add"}],
+            [{"text": "📋 List BINs", "callback_data": "admin_list"}],
+            [{"text": "🗑️ Delete BIN", "callback_data": "admin_delete"}],
+            [{"text": "🗑️ Delete ALL", "callback_data": "admin_delete_all"}],
+            [{"text": "⭐ Add Points", "callback_data": "admin_addpoints"}],
+            [{"text": "📢 Broadcast", "callback_data": "admin_broadcast"}],
+            [{"text": "👥 All Users", "callback_data": "admin_users"}],
+            [{"text": "📊 Admin Stats", "callback_data": "admin_stats"}],
+            [{"text": "🔙 Back", "callback_data": "menu_back"}],
+        ]
+    }
+    send_message(chat_id, f"👑 *Owner Panel*", reply_markup=keyboard)
+
+def handle_callback(query):
+    callback_id = query["id"]
+    chat_id = query["message"]["chat"]["id"]
+    message_id = query["message"]["message_id"]
+    data = query["data"]
+    user_id = query["from"]["id"]
 
     if data == "check_join":
-
-        if is_member(
-            user_id
-        ):
-
-            answer_callback(
-                callback_id,
-                "✅ Membership verified!"
-            )
-
-            send_message(
-
+        if is_member(user_id):
+            answer_callback(callback_id, "✅ Joined!")
+            edit_message(
                 chat_id,
-
-                "✅ *Verified!*\n\n"
-                "Now send /start."
+                message_id,
+                "✅ *You've joined!*\n\nNow use /start to access the bot."
             )
-
         else:
-
-            answer_callback(
-                callback_id,
-                "❌ You haven't joined yet."
+            answer_callback(callback_id, "❌ Not joined yet.")
+            edit_message(
+                chat_id,
+                message_id,
+                f"⚠️ *You still need to join the channel.*\n\n"
+                f"Click below to join @{CHANNEL_USERNAME}",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "📢 Join Channel", "url": CHANNEL_LINK}],
+                        [{"text": "✅ I've Joined!", "callback_data": "check_join"}],
+                    ]
+                }
             )
-
         return
 
-    # --------------------------------------------------------
-    # USER REFERRALS
-    # --------------------------------------------------------
+    user_data = db.get_user(user_id)
+    if not user_data:
+        answer_callback(callback_id, "Use /start first.")
+        return
 
+    answer_callback(callback_id)
+
+    # ─── ⭐ REFERRALS COMMAND ⭐ ─────────────────────────────────────
     if data == "referrals":
-
-        answer_callback(
-            callback_id
-        )
-
-        show_referrals(
-            chat_id,
-            user_id
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # USER STATS
-    # --------------------------------------------------------
-
-    if data == "stats":
-
-        answer_callback(
-            callback_id
-        )
-
-        user = db.get_user(
-            user_id
-        )
-
-        if user:
-
-            send_message(
-
-                chat_id,
-
-                f"📊 *Your Stats*\n\n"
-
-                f"👥 Referrals: "
-                f"{user['referral_count']}\n"
-
-                f"⭐ Points: "
-                f"{user['points']}"
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # ADMIN AUTH
-    # --------------------------------------------------------
-
-    if data == "admin_panel":
-
-        answer_callback(
-            callback_id
-        )
-
-        if user_id != ADMIN_ID:
-
-            send_message(
-                chat_id,
-                "❌ Unauthorized."
-            )
-
-            return
-
-        if user_id not in admin_sessions:
-
-            send_message(
-
-                chat_id,
-
-                "🔐 You are not logged in.\n\n"
-                "Use /admin."
-            )
-
-            return
-
-        admin_panel(
-            chat_id
-        )
-
-        return
-
-    if user_id != ADMIN_ID:
-
-        answer_callback(
-            callback_id,
-            "❌ Unauthorized."
-        )
-
-        return
-
-    if user_id not in admin_sessions:
-
-        answer_callback(
-            callback_id,
-            "❌ Login required."
-        )
-
-        return
-
-    answer_callback(
-        callback_id
-    )
-
-    # --------------------------------------------------------
-    # ADMIN STATS
-    # --------------------------------------------------------
-
-    if data == "admin_stats":
-
-        users, refs, points = db.stats()
-
-        send_message(
-
-            chat_id,
-
-            f"📊 *BOT STATISTICS*\n\n"
-
-            f"👤 Users: {users}\n"
-            f"👥 Referrals: {refs}\n"
-            f"⭐ Points: {points}"
-        )
-
-    # --------------------------------------------------------
-    # TOP
-    # --------------------------------------------------------
-
-    elif data == "admin_top":
-
-        top = db.top_referrers()
-
-        text = (
-            "🏆 *TOP REFERRERS*\n\n"
-        )
-
-        if not top:
-
-            text += "No referrals yet."
-
-        else:
-
-            for i, row in enumerate(
-                top,
-                1
-            ):
-
-                uid = row[0]
-
-                username = row[1]
-
-                first_name = row[2]
-
-                refs = row[3]
-
-                points = row[4]
-
-                name = (
-                    f"@{username}"
-                    if username
-                    else first_name
-                    or str(uid)
-                )
-
-                text += (
-                    f"{i}. {name}\n"
-                    f"👥 {refs} | "
-                    f"⭐ {points}\n\n"
-                )
-
-        send_message(
-            chat_id,
-            text
-        )
-
-    # --------------------------------------------------------
-    # USERS
-    # --------------------------------------------------------
-
-    elif data == "admin_users":
-
-        users = db.all_users()
-
-        text = "👥 *USERS*\n\n"
-
-        for row in users:
-
-            uid = row[0]
-
-            username = row[1]
-
-            first_name = row[2]
-
-            points = row[3]
-
-            refs = row[4]
-
-            name = (
-                f"@{username}"
-                if username
-                else first_name
-                or str(uid)
-            )
-
-            text += (
-                f"• {name}\n"
-                f"ID: `{uid}`\n"
-                f"⭐ {points} | "
-                f"👥 {refs}\n\n"
-            )
-
-        send_message(
-            chat_id,
-            text[:4000]
-        )
-
-    # --------------------------------------------------------
-    # ADD POINTS
-    # --------------------------------------------------------
-
-    elif data == "admin_addpoints":
-
-        send_message(
-
-            chat_id,
-
-            "⭐ *Add Points*\n\n"
-
-            "Use:\n"
-            "`/addpoints USER_ID AMOUNT`\n\n"
-
-            "Example:\n"
-            "`/addpoints 123456789 5`"
-        )
-
-    # --------------------------------------------------------
-    # BROADCAST
-    # --------------------------------------------------------
-
-    elif data == "admin_broadcast":
-
-        send_message(
-
-            chat_id,
-
-            "📢 *Broadcast*\n\n"
-
-            "Use:\n"
-            "`/broadcast Your message`"
-        )
-
-    # --------------------------------------------------------
-    # LOGOUT
-    # --------------------------------------------------------
-
-    elif data == "admin_logout":
-
-        admin_sessions.discard(
-            user_id
-        )
-
-        send_message(
-            chat_id,
-            "🚪 Logged out."
-        )
-
-
-# ============================================================
-# MESSAGE HANDLER
-# ============================================================
-
-def message_handler(message):
-
-    user = message["from"]
-
-    user_id = user["id"]
-
-    chat_id = message["chat"]["id"]
-
-    text = message.get(
-        "text",
-        ""
-    ).strip()
-
-    # --------------------------------------------------------
-    # ADMIN PASSWORD
-    # --------------------------------------------------------
-
-    if (
-        user_id == ADMIN_ID
-        and text == ADMIN_PASSWORD
-    ):
-
-        admin_sessions.add(
-            user_id
-        )
-
-        send_message(
-            chat_id,
-            "✅ Admin login successful."
-        )
-
-        admin_panel(
-            chat_id
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # START
-    # --------------------------------------------------------
-
-    if text.startswith(
-        "/start"
-    ):
-
-        handle_start(
-            message
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # REFERRALS
-    # --------------------------------------------------------
-
-    if text == "/referrals":
-
-        if not is_member(
-            user_id
-        ):
-
-            send_message(
-
-                chat_id,
-
-                "🔐 Join the channel first.",
-
-                join_keyboard()
-            )
-
-            return
-
-        show_referrals(
-            chat_id,
-            user_id
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # STATS
-    # --------------------------------------------------------
-
-    if text == "/stats":
-
-        user = db.get_user(
-            user_id
-        )
-
-        if not user:
-
-            send_message(
-                chat_id,
-                "❌ Use /start first."
-            )
-
-            return
-
-        send_message(
-
-            chat_id,
-
-            f"📊 *Your Stats*\n\n"
-
-            f"👥 Referrals: "
-            f"{user['referral_count']}\n"
-
-            f"⭐ Points: "
-            f"{user['points']}"
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # ADMIN
-    # --------------------------------------------------------
-
-    if text == "/admin":
-
-        if user_id != ADMIN_ID:
-
-            send_message(
-                chat_id,
-                "❌ Unauthorized."
-            )
-
-            return
-
-        if user_id in admin_sessions:
-
-            admin_panel(
-                chat_id
-            )
-
-        else:
-
-            send_message(
-
-                chat_id,
-
-                "🔐 *Admin Login*\n\n"
-                "Send the admin password."
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # ADD POINTS
-    # --------------------------------------------------------
-
-    if text.startswith(
-        "/addpoints"
-    ):
-
-        if user_id != ADMIN_ID:
-            return
-
-        if user_id not in admin_sessions:
-
-            send_message(
-                chat_id,
-                "❌ Login first."
-            )
-
-            return
-
-        parts = text.split()
-
-        if len(parts) != 3:
-
-            send_message(
-
-                chat_id,
-
-                "Usage:\n"
-                "/addpoints USER_ID AMOUNT"
-            )
-
-            return
-
+        # Get bot username dynamically
+        bot_username = BOT_USERNAME  # Fallback
         try:
+            r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe")
+            if r.status_code == 200:
+                bot_username = r.json().get("result", {}).get("username", BOT_USERNAME)
+        except:
+            pass
 
-            target = int(
-                parts[1]
-            )
-
-            amount = int(
-                parts[2]
-            )
-
-            if not db.user_exists(
-                target
-            ):
-
-                send_message(
-                    chat_id,
-                    "❌ User not found."
-                )
-
-                return
-
-            db.add_points(
-                target,
-                amount
-            )
-
-            send_message(
-
-                chat_id,
-
-                f"✅ Added "
-                f"{amount} points "
-                f"to {target}."
-            )
-
-        except ValueError:
-
-            send_message(
-                chat_id,
-                "❌ Invalid numbers."
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # BROADCAST
-    # --------------------------------------------------------
-
-    if text.startswith(
-        "/broadcast"
-    ):
-
-        if user_id != ADMIN_ID:
-            return
-
-        if user_id not in admin_sessions:
-
-            send_message(
-                chat_id,
-                "❌ Login first."
-            )
-
-            return
-
-        broadcast = text[
-            len("/broadcast"):
-        ].strip()
-
-        if not broadcast:
-
-            send_message(
-                chat_id,
-                "Usage: /broadcast message"
-            )
-
-            return
-
-        users = db.all_user_ids()
-
-        sent = 0
-
-        for row in users:
-
-            target = row[0]
-
-            result = send_message(
-
-                target,
-
-                f"📢 *Announcement*\n\n"
-                f"{broadcast}"
-            )
-
-            if result and result.get("ok"):
-
-                sent += 1
-
-            time.sleep(
-                0.05
-            )
+        referral_link = f"https://t.me/{bot_username}?start={user_id}"
 
         send_message(
-
             chat_id,
-
-            f"✅ Broadcast complete.\n\n"
-            f"Sent: {sent}\n"
-            f"Users: {len(users)}"
+            f"🎁 *Referral Stats*\n\n"
+            f"👥 Referrals: {user_data['referral_count']}\n"
+            f"⭐ Points: {user_data['points']}\n\n"
+            f"🔗 *Your referral link:*\n"
+            f"`{referral_link}`\n\n"
+            f"💡 Share this link with friends!\n"
+            f"Each referral = 1 point\n"
+            f"5 points = 1 BIN"
         )
+        return
 
+    # ─── ADMIN STATS ──────────────────────────────────────────────────
+    if data == "admin_stats":
+        if user_id != ADMIN_ID:
+            send_message(chat_id, "❌ Unauthorized.")
+            return
+        stats = db.get_stats()
+        top = db.get_top_referrers(10)
+        msg = (
+            f"📊 *Admin Stats*\n\n"
+            f"👥 Total Users: {stats[0]}\n"
+            f"🔗 Total Referrals: {stats[1]}\n"
+            f"⭐ Total Points: {stats[2]}\n"
+            f"📦 Total Items: {stats[3]}\n\n"
+            f"🏆 *Top 10 Referrers*\n"
+        )
+        for i, (uid, username, first_name, ref_count, points) in enumerate(top, 1):
+            name = first_name or username or f"User_{uid}"
+            msg += f"{i}. {name} — {ref_count} referrals ({points} pts)\n"
+        send_message(chat_id, msg)
+        return
 
-# ============================================================
-# GET UPDATES
-# ============================================================
+    if data == "owner_login":
+        send_message(chat_id, f"👑 Enter password:")
+        return
 
-def get_updates(
-    offset=None
-):
+    admin_actions = ["admin_add", "admin_list", "admin_delete", "admin_delete_all", 
+                     "admin_addpoints", "admin_stats", "admin_broadcast", "admin_users"]
+    if data in admin_actions and user_id not in admin_sessions:
+        send_message(chat_id, "❌ Login first. Click 'Owner Panel' and enter password.")
+        return
 
-    data = {
-        "timeout": 30,
-        "allowed_updates":
-            json.dumps([
-                "message",
-                "callback_query"
-            ])
-    }
+    if data == "admin_add":
+        send_message(chat_id, f"📦 Send: `/additem Name Category 5 Content`")
+    elif data == "admin_list":
+        items = db.get_items()
+        if not items:
+            send_message(chat_id, "📦 No items.")
+            return
+        msg = "📦 *BINs*\n\n"
+        for item_id, name, category, cost in items:
+            msg += f"• {name} ({category}) — {cost} pts [ID: {item_id}]\n"
+        send_message(chat_id, msg)
+    elif data == "admin_delete":
+        send_message(chat_id, f"🗑️ Send: `/delitem <item_id>`")
+    elif data == "admin_delete_all":
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "⚠️ YES DELETE ALL", "callback_data": "confirm_delete_all"}],
+                [{"text": "🔙 Cancel", "callback_data": "admin_back"}],
+            ]
+        }
+        send_message(chat_id, f"⚠️ Delete ALL BINs?", reply_markup=keyboard)
+    elif data == "confirm_delete_all":
+        db.delete_all_items()
+        send_message(chat_id, f"🗑️ All BINs deleted.")
+    elif data == "admin_addpoints":
+        send_message(chat_id, f"⭐ Send: `/addpoints <user_id> <amount>`")
+    elif data == "admin_stats":
+        stats = db.get_stats()
+        top = db.get_top_referrers(10)
+        msg = (
+            f"📊 *Admin Stats*\n\n"
+            f"👥 Total Users: {stats[0]}\n"
+            f"🔗 Total Referrals: {stats[1]}\n"
+            f"⭐ Total Points: {stats[2]}\n"
+            f"📦 Total Items: {stats[3]}\n\n"
+            f"🏆 *Top 10 Referrers*\n"
+        )
+        for i, (uid, username, first_name, ref_count, points) in enumerate(top, 1):
+            name = first_name or username or f"User_{uid}"
+            msg += f"{i}. {name} — {ref_count} referrals ({points} pts)\n"
+        send_message(chat_id, msg)
+    elif data == "admin_broadcast":
+        send_message(chat_id, f"📢 Send: `/broadcast <message>`")
+    elif data == "admin_users":
+        db.cursor.execute("SELECT user_id, username, first_name, points, referral_count FROM users ORDER BY points DESC")
+        users = db.cursor.fetchall()
+        if not users:
+            send_message(chat_id, "📊 No users yet.")
+            return
+        msg = "👥 *All Users*\n\n"
+        for uid, username, first_name, points, refs in users[:50]:
+            name = first_name or username or f"User_{uid}"
+            msg += f"• {name} — {points} pts, {refs} refs [ID: {uid}]\n"
+        if len(users) > 50:
+            msg += f"\n... and {len(users) - 50} more"
+        send_message(chat_id, msg)
+    elif data == "admin_back":
+        show_owner_panel(chat_id)
+    elif data == "menu_back":
+        handle_menu(chat_id, user_id)
+    elif data == "stats":
+        send_message(chat_id, f"📊 Points: {user_data['points']}")
+    elif data == "redeem":
+        items = db.get_items()
+        if not items:
+            send_message(chat_id, "📦 No BINs.")
+            return
+        available = user_data["points"]
+        keyboard = {"inline_keyboard": []}
+        for item_id, name, category, cost in items:
+            status = "🔓" if available >= cost else "🔒"
+            keyboard["inline_keyboard"].append([{"text": f"{status} {name} ({category}) — {cost} pts", "callback_data": f"redeem_item_{item_id}"}])
+        keyboard["inline_keyboard"].append([{"text": "🔙 Back", "callback_data": "menu_back"}])
+        send_message(chat_id, f"📦 Available: {available} points", reply_markup=keyboard)
+    elif data.startswith("redeem_item_"):
+        item_id = int(data.split("_")[2])
+        item = db.get_item(item_id)
+        if not item:
+            send_message(chat_id, "❌ Not found.")
+            return
+        item_id, name, category, content, cost = item
+        available = user_data["points"]
+        if available < cost:
+            send_message(chat_id, f"❌ Need {cost} points, you have {available}")
+            return
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "✅ Confirm", "callback_data": f"confirm_redeem_{item_id}"}],
+                [{"text": "🔙 Cancel", "callback_data": "redeem"}],
+            ]
+        }
+        send_message(chat_id, f"🔓 Confirm: {name} ({cost} pts)", reply_markup=keyboard)
+    elif data.startswith("confirm_redeem_"):
+        item_id = int(data.split("_")[2])
+        item = db.get_item(item_id)
+        if not item:
+            send_message(chat_id, "❌ Not found.")
+            return
+        item_id, name, category, content, cost = item
+        available = user_data["points"]
+        if available < cost:
+            send_message(chat_id, "❌ Not enough points.")
+            return
+        db.add_points(user_id, -cost)
+        send_message(chat_id, f"✅ *{name}*\n```\n{content}\n```\nBalance: {available - cost}")
 
-    if offset is not None:
-
-        data["offset"] = offset
-
-    return api(
-        "getUpdates",
-        data
-    )
-
-
-# ============================================================
-# MAIN
-# ============================================================
+# ─── MAIN ──────────────────────────────────────────────────────────────
 
 def main():
-
-    print()
-    print(
-        "================================"
-    )
-    print(
-        "🤖 RHON REFERRAL BOT"
-    )
-    print(
-        "================================"
-    )
-    print(
-        f"Bot: @{BOT_USERNAME}"
-    )
-    print(
-        f"Channel: @{CHANNEL_USERNAME}"
-    )
-    print(
-        f"Admin ID: {ADMIN_ID}"
-    )
-    print(
-        "Database: FRESH"
-    )
-    print(
-        "================================"
-    )
-
-    offset = None
+    print("🤖 Bot started: @Rhonreferbot")
+    print(f"📢 Channel: {CHANNEL_LINK}")
+    print("👑 Password: RHONLESTTERLOPEZ")
+    print("="*50)
+    last_update = 0
 
     while True:
-
         try:
-
-            result = get_updates(
-                offset
-            )
-
-            if not result:
-
-                time.sleep(2)
-
-                continue
-
-            updates = result.get(
-                "result",
-                []
-            )
-
+            updates = get_updates(last_update + 1 if last_update else None)
             for update in updates:
+                last_update = update["update_id"]
 
-                offset = (
-                    update["update_id"] + 1
-                )
+                if "message" in update:
+                    msg = update["message"]
+                    chat_id = msg["chat"]["id"]
+                    user_id = msg["from"]["id"]
+                    username = msg["from"].get("username", "")
+                    first_name = msg["from"].get("first_name", "")
+                    text = msg.get("text", "")
 
-                try:
+                    if text.upper() == ADMIN_PASSWORD:
+                        admin_sessions[user_id] = True
+                        show_owner_panel(chat_id)
+                    elif text == "/start":
+                        args = text.split()[1:] if len(text.split()) > 1 else []
+                        handle_start(chat_id, user_id, username, first_name, args)
+                    elif text == "/menu":
+                        handle_menu(chat_id, user_id)
+                    elif text.startswith("/additem") and user_id in admin_sessions:
+                        parts = text.split()
+                        if len(parts) < 5:
+                            send_message(chat_id, "Usage: /additem Name Category 5 Content")
+                        else:
+                            try:
+                                name = parts[1]
+                                category = parts[2]
+                                cost = int(parts[3])
+                                content = " ".join(parts[4:])
+                                db.add_item(name, category, content, cost)
+                                send_message(chat_id, f"✅ Added: {name}")
+                            except:
+                                send_message(chat_id, "❌ Error.")
+                    elif text.startswith("/delitem") and user_id in admin_sessions:
+                        parts = text.split()
+                        if len(parts) != 2:
+                            send_message(chat_id, "Usage: /delitem <id>")
+                        else:
+                            try:
+                                item_id = int(parts[1])
+                                db.delete_item(item_id)
+                                send_message(chat_id, f"✅ Deleted ID: {item_id}")
+                            except:
+                                send_message(chat_id, "❌ Invalid ID.")
+                    elif text.startswith("/deleteallbins") and user_id in admin_sessions:
+                        db.delete_all_items()
+                        send_message(chat_id, "🗑️ All BINs deleted.")
+                    elif text.startswith("/addpoints") and user_id in admin_sessions:
+                        parts = text.split()
+                        if len(parts) != 3:
+                            send_message(chat_id, "Usage: /addpoints <user_id> <amount>")
+                        else:
+                            try:
+                                target_id = int(parts[1])
+                                points = int(parts[2])
+                                db.add_points(target_id, points)
+                                send_message(chat_id, f"✅ Added {points} points to {target_id}")
+                            except:
+                                send_message(chat_id, "❌ Invalid.")
+                    elif text.startswith("/broadcast") and user_id in admin_sessions:
+                        msg = text.replace("/broadcast", "", 1).strip()
+                        if not msg:
+                            send_message(chat_id, "Usage: /broadcast <message>")
+                        else:
+                            db.cursor.execute("SELECT user_id FROM users")
+                            users = db.cursor.fetchall()
+                            sent = 0
+                            for (uid,) in users:
+                                try:
+                                    send_message(uid, f"📢 *Announcement*\n\n{msg}")
+                                    sent += 1
+                                    time.sleep(0.1)
+                                except:
+                                    pass
+                            send_message(chat_id, f"✅ Broadcast sent to {sent} users.")
+                    elif text.startswith("/users") and user_id in admin_sessions:
+                        db.cursor.execute("SELECT user_id, username, first_name, points, referral_count FROM users ORDER BY points DESC")
+                        users = db.cursor.fetchall()
+                        if not users:
+                            send_message(chat_id, "📊 No users yet.")
+                        else:
+                            msg = "👥 *All Users*\n\n"
+                            for uid, username, first_name, points, refs in users[:50]:
+                                name = first_name or username or f"User_{uid}"
+                                msg += f"• {name} — {points} pts, {refs} refs [ID: {uid}]\n"
+                            if len(users) > 50:
+                                msg += f"\n... and {len(users) - 50} more"
+                            send_message(chat_id, msg)
 
-                    if "message" in update:
-
-                        message_handler(
-                            update["message"]
-                        )
-
-                    elif (
-                        "callback_query"
-                        in update
-                    ):
-
-                        callback_handler(
-                            update[
-                                "callback_query"
-                            ]
-                        )
-
-                except Exception as e:
-
-                    print(
-                        "UPDATE ERROR:",
-                        e
-                    )
-
-        except KeyboardInterrupt:
-
-            print(
-                "Bot stopped."
-            )
-
-            break
+                elif "callback_query" in update:
+                    handle_callback(update["callback_query"])
 
         except Exception as e:
-
-            print(
-                "MAIN ERROR:",
-                e
-            )
-
-            time.sleep(3)
-
+            print(f"Error: {e}")
+            time.sleep(2)
 
 if __name__ == "__main__":
     main()
